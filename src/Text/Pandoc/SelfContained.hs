@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 {- |
    Module      : Text.Pandoc.SelfContained
-   Copyright   : Copyright (C) 2011-2019 John MacFarlane
+   Copyright   : Copyright (C) 2011-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,7 +14,6 @@ offline, by incorporating linked images, CSS, and scripts into
 the HTML using data URIs.
 -}
 module Text.Pandoc.SelfContained ( makeDataURI, makeSelfContained ) where
-import Prelude
 import Codec.Compression.GZip as Gzip
 import Control.Applicative ((<|>))
 import Control.Monad.Except (throwError)
@@ -29,8 +27,8 @@ import Data.Char (isAlphaNum, isAscii)
 import Network.URI (escapeURIString)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 import Text.HTML.TagSoup
-import Text.Pandoc.Class (PandocMonad (..), fetchItem, getInputFiles, report,
-                          setInputFiles)
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..), fetchItem,
+                                      getInputFiles, report, setInputFiles)
 import Text.Pandoc.Error
 import Text.Pandoc.Logging
 import Text.Pandoc.MIME (MimeType)

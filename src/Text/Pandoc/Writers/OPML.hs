@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE CPP               #-}
 {- |
    Module      : Text.Pandoc.Writers.OPML
-   Copyright   : Copyright (C) 2013-2019 John MacFarlane
+   Copyright   : Copyright (C) 2013-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,11 +12,10 @@
 Conversion of 'Pandoc' documents to OPML XML.
 -}
 module Text.Pandoc.Writers.OPML ( writeOPML) where
-import Prelude
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Data.Time
 import Text.Pandoc.Definition
 import Text.Pandoc.Options

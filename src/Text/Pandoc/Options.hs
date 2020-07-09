@@ -1,12 +1,11 @@
 {-# LANGUAGE CPP                #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE NoImplicitPrelude  #-}
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {- |
    Module      : Text.Pandoc.Options
-   Copyright   : Copyright (C) 2012-2019 John MacFarlane
+   Copyright   : Copyright (C) 2012-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -33,7 +32,6 @@ module Text.Pandoc.Options ( module Text.Pandoc.Extensions
                            , defaultMathJaxURL
                            , defaultKaTeXURL
                            ) where
-import Prelude
 import Control.Applicative ((<|>))
 import Data.Char (toLower)
 import Data.Maybe (fromMaybe)

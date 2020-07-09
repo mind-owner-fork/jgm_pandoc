@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.MediaWiki
-   Copyright   : Copyright (C) 2008-2019 John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,14 +14,13 @@ Conversion of 'Pandoc' documents to MediaWiki markup.
 MediaWiki:  <http://www.mediawiki.org/wiki/MediaWiki>
 -}
 module Text.Pandoc.Writers.MediaWiki ( writeMediaWiki, highlightingLangs ) where
-import Prelude
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -152,7 +150,8 @@ blockToMediaWiki (BlockQuote blocks) = do
   contents <- blockListToMediaWiki blocks
   return $ "<blockquote>" <> contents <> "</blockquote>"
 
-blockToMediaWiki (Table capt aligns widths headers rows') = do
+blockToMediaWiki (Table _ blkCapt specs thead tbody tfoot) = do
+  let (capt, aligns, widths, headers, rows') = toLegacyTable blkCapt specs thead tbody tfoot
   caption <- if null capt
                 then return ""
                 else do
@@ -372,6 +371,10 @@ inlineToMediaWiki (Span attrs ils) = do
 inlineToMediaWiki (Emph lst) = do
   contents <- inlineListToMediaWiki lst
   return $ "''" <> contents <> "''"
+
+inlineToMediaWiki (Underline lst) = do
+  contents <- inlineListToMediaWiki lst
+  return $ "<u>" <> contents <> "</u>"
 
 inlineToMediaWiki (Strong lst) = do
   contents <- inlineListToMediaWiki lst

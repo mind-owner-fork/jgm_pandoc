@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.ExportSettings
-   Copyright   : © 2016–2019 Albert Krewinkel
+   Copyright   : © 2016–2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -13,8 +12,7 @@ module Text.Pandoc.Readers.Org.ExportSettings
   ( exportSettings
   ) where
 
-import Prelude
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Logging (LogMessage (UnknownOrgExportOption))
 import Text.Pandoc.Readers.Org.ParserState
 import Text.Pandoc.Readers.Org.Parsing
@@ -22,7 +20,7 @@ import Text.Pandoc.Readers.Org.Parsing
 import Control.Monad (mzero, void)
 import Data.Char (toLower)
 import Data.Maybe (listToMaybe)
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 
 -- | Read and handle space separated org-mode export settings.
 exportSettings :: PandocMonad m => OrgParser m ()
@@ -49,9 +47,9 @@ exportSetting = choice
   , booleanSetting "creator" (\val es -> es { exportWithCreator = val })
   , complementableListSetting "d" (\val es -> es { exportDrawers = val })
   , ignoredSetting "date"
-  , ignoredSetting "e"
+  , booleanSetting "e" (\val es -> es { exportWithEntities = val })
   , booleanSetting "email" (\val es -> es { exportWithEmail = val })
-  , ignoredSetting "f"
+  , booleanSetting "f" (\val es -> es { exportWithFootnotes = val })
   , integerSetting "H" (\val es -> es { exportHeadlineLevels = val })
   , ignoredSetting "inline"
   , ignoredSetting "num"
@@ -61,15 +59,17 @@ exportSetting = choice
   , ignoredSetting "stat"
   , booleanSetting "tags" (\val es -> es { exportWithTags = val })
   , ignoredSetting "tasks"
-  , ignoredSetting "tex"
+  , texSetting     "tex" (\val es -> es { exportWithLatex = val })
   , ignoredSetting "timestamp"
   , ignoredSetting "title"
   , ignoredSetting "toc"
   , booleanSetting "todo" (\val es -> es { exportWithTodoKeywords = val })
-  , ignoredSetting "|"
+  , booleanSetting "|" (\val es -> es { exportWithTables = val })
   , ignoreAndWarn
   ] <?> "export setting"
 
+-- | Generic handler for export settings. Takes a parser which converts
+-- the plain option text into a data structure.
 genericExportSetting :: Monad m
                      => OrgParser m a
                      -> Text
@@ -103,10 +103,8 @@ archivedTreeSetting :: Monad m
 archivedTreeSetting =
   genericExportSetting $ archivedTreesHeadlineSetting <|> archivedTreesBoolean
  where
-   archivedTreesHeadlineSetting = try $ do
-     _ <- string "headline"
-     lookAhead (newline <|> spaceChar)
-     return ArchivedTreesHeadlineOnly
+   archivedTreesHeadlineSetting =
+     ArchivedTreesHeadlineOnly <$ optionString "headline"
 
    archivedTreesBoolean = try $ do
      exportBool <- elispBoolean
@@ -145,6 +143,22 @@ complementableListSetting = genericExportSetting $ choice
      char '"'
        *> manyTillChar alphaNum (char '"')
 
+-- | Parses either @t@, @nil@, or @verbatim@ into a 'TeXExport' value.
+texSetting :: Monad m
+           => Text
+           -> ExportSettingSetter TeXExport
+           -> OrgParser m ()
+texSetting = genericExportSetting $ texVerbatim <|> texBoolean
+ where
+   texVerbatim = TeXVerbatim <$ optionString "verbatim"
+
+   texBoolean = try $ do
+     exportBool <- elispBoolean
+     return $
+       if exportBool
+       then TeXExport
+       else TeXIgnore
+
 -- | Read but ignore the export setting.
 ignoredSetting :: Monad m => Text -> OrgParser m ()
 ignoredSetting s = try (() <$ textStr s <* char ':' <* many1 nonspaceChar)
@@ -166,3 +180,11 @@ elispBoolean = try $ do
              "{}"  -> False
              "()"  -> False
              _     -> True
+
+-- | Try to parse a literal string as the option value. Returns the
+-- string on success.
+optionString :: Monad m => Text -> OrgParser m Text
+optionString s = try $ do
+  _ <- string (unpack s)
+  lookAhead (newline <|> spaceChar)
+  return s

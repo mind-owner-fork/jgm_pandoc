@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.LaTeX
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -18,7 +17,6 @@ module Text.Pandoc.Writers.LaTeX (
     writeLaTeX
   , writeBeamer
   ) where
-import Prelude
 import Control.Applicative ((<|>))
 import Control.Monad.State.Strict
 import Data.Monoid (Any(..))
@@ -33,7 +31,7 @@ import Network.URI (unEscapeString)
 import Text.DocTemplates (FromContext(lookupContext), renderTemplate,
                           Val(..), Context(..))
 import Text.Pandoc.BCP47 (Lang (..), getLang, renderLang)
-import Text.Pandoc.Class (PandocMonad, report, toLang)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report, toLang)
 import Text.Pandoc.Definition
 import Text.Pandoc.Highlighting (formatLaTeXBlock, formatLaTeXInline, highlight,
                                  styleToLaTeX, toListingsLanguage)
@@ -157,7 +155,8 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                                           _               -> "article"
   when (documentClass `elem` chaptersClasses) $
      modify $ \s -> s{ stHasChapters = True }
-  case T.toLower . render Nothing <$> getField "csquotes" metadata of
+  case lookupContext "csquotes" (writerVariables options) `mplus`
+       (stringify <$> lookupMeta "csquotes" meta) of
      Nothing      -> return ()
      Just "false" -> return ()
      Just _       -> modify $ \s -> s{stCsquotes = True}
@@ -760,7 +759,8 @@ blockToLaTeX (Header level (id',classes,_) lst) = do
   hdr <- sectionHeader classes id' level lst
   modify $ \s -> s{stInHeading = False}
   return hdr
-blockToLaTeX (Table caption aligns widths heads rows) = do
+blockToLaTeX (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, heads, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   (captionText, captForLof, captNotes) <- getCaption False caption
   let toHeaders hs = do contents <- tableRowToLaTeX True aligns widths hs
                         return ("\\toprule" $$ contents $$ "\\midrule")
@@ -1031,6 +1031,14 @@ sectionHeader classes ident level lst = do
                                 braces txtNoNotes
                          else empty
 
+mapAlignment :: Text -> Text
+mapAlignment a = case a of
+                   "top" -> "T"
+                   "top-baseline" -> "t"
+                   "bottom" -> "b"
+                   "center" -> "c"
+                   _ -> a 
+
 wrapDiv :: PandocMonad m => Attr -> Doc Text -> LW m (Doc Text)
 wrapDiv (_,classes,kvs) t = do
   beamer <- gets stBeamer
@@ -1038,14 +1046,25 @@ wrapDiv (_,classes,kvs) t = do
   lang <- toLang $ lookup "lang" kvs
   let wrapColumns = if beamer && "columns" `elem` classes
                     then \contents ->
-                           inCmd "begin" "columns" <> brackets "T"
-                           $$ contents
-                           $$ inCmd "end" "columns"
+                           let valign = maybe "T" mapAlignment (lookup "align" kvs)
+                               totalwidth = maybe [] (\x -> ["totalwidth=" <> x])
+                                 (lookup "totalwidth" kvs)
+                               onlytextwidth = filter ((==) "onlytextwidth") classes
+                               options = text $ T.unpack $ T.intercalate "," $
+                                 valign : totalwidth ++ onlytextwidth 
+                           in inCmd "begin" "columns" <> brackets options
+                              $$ contents
+                              $$ inCmd "end" "columns"
                     else id
       wrapColumn  = if beamer && "column" `elem` classes
                     then \contents ->
-                           let w = maybe "0.48" fromPct (lookup "width" kvs)
-                           in  inCmd "begin" "column" <>
+                           let valign =
+                                 maybe ""
+                                 (brackets . text . T.unpack . mapAlignment)
+                                 (lookup "align" kvs)
+                               w = maybe "0.48" fromPct (lookup "width" kvs) 
+                           in  inCmd "begin" "column" <> 
+                               valign <>
                                braces (literal w <> "\\textwidth")
                                $$ contents
                                $$ inCmd "end" "column"
@@ -1140,6 +1159,7 @@ inlineToLaTeX (Span (id',classes,kvs) ils) = do
                then braces contents
                else foldr inCmd contents cmds)
 inlineToLaTeX (Emph lst) = inCmd "emph" <$> inlineListToLaTeX lst
+inlineToLaTeX (Underline lst) = inCmd "underline" <$> inlineListToLaTeX lst
 inlineToLaTeX (Strong lst) = inCmd "textbf" <$> inlineListToLaTeX lst
 inlineToLaTeX (Strikeout lst) = do
   -- we need to protect VERB in an mbox or we get an error
@@ -1184,7 +1204,7 @@ inlineToLaTeX (Code (_,classes,kvs) str) = do
         let chr = case "!\"'()*,-./:;?@" \\ T.unpack str of
                        (c:_) -> c
                        []    -> '!'
-        let str' = escapeStringUsing (backslashEscapes "\\{}%~_&#") str
+        let str' = escapeStringUsing (backslashEscapes "\\{}%~_&#^") str
         -- we always put lstinline in a dummy 'passthrough' command
         -- (defined in the default template) so that we don't have
         -- to change the way we escape characters depending on whether
@@ -1214,7 +1234,9 @@ inlineToLaTeX (Quoted qt lst) = do
   csquotes <- liftM stCsquotes get
   opts <- gets stOptions
   if csquotes
-     then return $ "\\enquote" <> braces contents
+     then return $ case qt of
+               DoubleQuote -> "\\enquote" <> braces contents
+               SingleQuote -> "\\enquote*" <> braces contents
      else do
        let s1 = if not (null lst) && isQuoted (head lst)
                    then "\\,"
@@ -1262,29 +1284,33 @@ inlineToLaTeX SoftBreak = do
        WrapNone     -> return space
        WrapPreserve -> return cr
 inlineToLaTeX Space = return space
-inlineToLaTeX (Link _ txt (src,_))
-  | Just ('#', ident) <- T.uncons src
-  = do
-      contents <- inlineListToLaTeX txt
-      lab <- toLabel ident
-      return $ text "\\protect\\hyperlink" <> braces (literal lab) <> braces contents
-  | otherwise =
-  case txt of
-        [Str x] | unEscapeString (T.unpack x) == unEscapeString (T.unpack src) ->  -- autolink
-             do modify $ \s -> s{ stUrl = True }
-                src' <- stringToLaTeX URLString (escapeURI src)
-                return $ literal $ "\\url{" <> src' <> "}"
-        [Str x] | Just rest <- T.stripPrefix "mailto:" src,
-                  unEscapeString (T.unpack x) == unEscapeString (T.unpack rest) -> -- email autolink
-             do modify $ \s -> s{ stUrl = True }
-                src' <- stringToLaTeX URLString (escapeURI src)
-                contents <- inlineListToLaTeX txt
-                return $ "\\href" <> braces (literal src') <>
-                   braces ("\\nolinkurl" <> braces contents)
-        _ -> do contents <- inlineListToLaTeX txt
-                src' <- stringToLaTeX URLString (escapeURI src)
-                return $ literal ("\\href{" <> src' <> "}{") <>
-                         contents <> char '}'
+inlineToLaTeX (Link (id',_,_) txt (src,_)) =
+   (case T.uncons src of
+     Just ('#', ident) -> do
+        contents <- inlineListToLaTeX txt
+        lab <- toLabel ident
+        return $ text "\\protect\\hyperlink" <> braces (literal lab) <> braces contents
+     _ -> case txt of
+          [Str x] | unEscapeString (T.unpack x) == unEscapeString (T.unpack src) ->  -- autolink
+               do modify $ \s -> s{ stUrl = True }
+                  src' <- stringToLaTeX URLString (escapeURI src)
+                  return $ literal $ "\\url{" <> src' <> "}"
+          [Str x] | Just rest <- T.stripPrefix "mailto:" src,
+                    unEscapeString (T.unpack x) == unEscapeString (T.unpack rest) -> -- email autolink
+               do modify $ \s -> s{ stUrl = True }
+                  src' <- stringToLaTeX URLString (escapeURI src)
+                  contents <- inlineListToLaTeX txt
+                  return $ "\\href" <> braces (literal src') <>
+                     braces ("\\nolinkurl" <> braces contents)
+          _ -> do contents <- inlineListToLaTeX txt
+                  src' <- stringToLaTeX URLString (escapeURI src)
+                  return $ literal ("\\href{" <> src' <> "}{") <>
+                           contents <> char '}')
+     >>= (if T.null id'
+             then return
+             else \x -> do
+               linkAnchor <- hypertarget False id' x
+               return ("\\protect" <> linkAnchor))
 inlineToLaTeX il@(Image _ _ (src, _))
   | Just _ <- T.stripPrefix "data:" src = do
       report $ InlineNotRendered il
@@ -1421,24 +1447,35 @@ citeCommand c p s k = do
   args <- citeArguments p s k
   return $ literal ("\\" <> c) <> args
 
+type Prefix = [Inline]
+type Suffix = [Inline]
+type CiteId = Text
+data CiteGroup = CiteGroup Prefix Suffix [CiteId]
+
+citeArgumentsList :: PandocMonad m
+              => CiteGroup -> LW m (Doc Text)
+citeArgumentsList (CiteGroup _ _ []) = return empty
+citeArgumentsList (CiteGroup pfxs sfxs ids) = do
+      pdoc <- inlineListToLaTeX pfxs
+      sdoc <- inlineListToLaTeX sfxs'
+      return $ (optargs pdoc sdoc) <>
+              (braces (literal (T.intercalate "," (reverse ids))))
+      where sfxs' = stripLocatorBraces $ case sfxs of
+                (Str t : r) -> case T.uncons t of
+                  Just (x, xs)
+                    | T.null xs
+                    , isPunctuation x -> dropWhile (== Space) r
+                    | isPunctuation x -> Str xs : r
+                  _ -> sfxs
+                _   -> sfxs
+            optargs pdoc sdoc = case (isEmpty pdoc, isEmpty sdoc) of
+                 (True, True ) -> empty
+                 (True, False) -> brackets sdoc
+                 (_   , _    ) -> brackets pdoc <> brackets sdoc
+
 citeArguments :: PandocMonad m
               => [Inline] -> [Inline] -> Text -> LW m (Doc Text)
-citeArguments p s k = do
-  let s' = stripLocatorBraces $ case s of
-        (Str t : r) -> case T.uncons t of
-          Just (x, xs)
-            | T.null xs
-            , isPunctuation x -> dropWhile (== Space) r
-            | isPunctuation x -> Str xs : r
-          _ -> s
-        _   -> s
-  pdoc <- inlineListToLaTeX p
-  sdoc <- inlineListToLaTeX s'
-  let optargs = case (isEmpty pdoc, isEmpty sdoc) of
-                     (True, True ) -> empty
-                     (True, False) -> brackets sdoc
-                     (_   , _    ) -> brackets pdoc <> brackets sdoc
-  return $ optargs <> braces (literal k)
+citeArguments p s k = citeArgumentsList (CiteGroup p s [k])
 
 -- strip off {} used to define locator in pandoc-citeproc; see #5722
 stripLocatorBraces :: [Inline] -> [Inline]
@@ -1470,18 +1507,24 @@ citationsToBiblatex (c:cs)
                     NormalCitation -> "\\autocite"
       return $ text cmd <>
                braces (literal (T.intercalate "," (map citationId (c:cs))))
-  | otherwise = do
-    let cmd = case citationMode c of
+  | otherwise
+    = do
+      let cmd = case citationMode c of
                     SuppressAuthor -> "\\autocites*"
                     AuthorInText   -> "\\textcites"
                     NormalCitation -> "\\autocites"
-    let convertOne Citation { citationId = k
-                            , citationPrefix = p
-                            , citationSuffix = s
-                            }
-                = citeArguments p s k
-    args <- mapM convertOne (c:cs)
-    return $ text cmd <> foldl' (<>) empty args
+
+      groups <- mapM citeArgumentsList (reverse (foldl' grouper [] (c:cs)))
+
+      return $ text cmd <> (mconcat groups)
+
+  where grouper prev cit = case prev of
+         ((CiteGroup oPfx oSfx ids):rest)
+             | null oSfx && null pfx -> (CiteGroup oPfx sfx (cid:ids)):rest
+         _ -> (CiteGroup pfx sfx [cid]):prev
+         where pfx = citationPrefix cit
+               sfx = citationSuffix cit
+               cid = citationId cit
 
 citationsToBiblatex _ = return empty
 

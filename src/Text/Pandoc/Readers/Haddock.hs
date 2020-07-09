@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
@@ -16,7 +15,6 @@ module Text.Pandoc.Readers.Haddock
     ( readHaddock
     ) where
 
-import Prelude
 import Control.Monad.Except (throwError)
 import Data.List (intersperse)
 import Data.Maybe (fromMaybe)
@@ -26,7 +24,7 @@ import Documentation.Haddock.Parser
 import Documentation.Haddock.Types as H
 import Text.Pandoc.Builder (Blocks, Inlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
 import Text.Pandoc.Options
@@ -87,14 +85,20 @@ docHToBlocks d' =
                     , tableBodyRows = bodyRows
                     }
       -> let toCells = map (docHToBlocks . tableCellContents) . tableRowCells
+             toRow = Row nullAttr . map B.simpleCell
+             toHeaderRow l = if null l then [] else [toRow l]
              (header, body) =
                if null headerRows
                   then ([], map toCells bodyRows)
                   else (toCells (head headerRows),
                         map toCells (tail headerRows ++ bodyRows))
              colspecs = replicate (maximum (map length body))
-                             (AlignDefault, 0.0)
-         in  B.table mempty colspecs header body
+                             (AlignDefault, ColWidthDefault)
+         in  B.table B.emptyCaption
+                     colspecs
+                     (TableHead nullAttr $ toHeaderRow header)
+                     [TableBody nullAttr 0 [] $ map toRow body]
+                     (TableFoot nullAttr [])
 
   where inlineFallback = B.plain $ docHToInlines False d'
         consolidatePlains = B.fromList . consolidatePlains' . B.toList

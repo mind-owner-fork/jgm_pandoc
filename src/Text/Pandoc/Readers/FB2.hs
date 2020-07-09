@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.FB2
-   Copyright   : Copyright (C) 2018-2019 Alexander Krotov
+   Copyright   : Copyright (C) 2018-2020 Alexander Krotov
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Alexander Krotov <ilabdsf@gmail.com>
@@ -23,7 +23,6 @@ TODO:
 -}
 
 module Text.Pandoc.Readers.FB2 ( readFB2 ) where
-import Prelude
 import Control.Monad.Except (throwError)
 import Control.Monad.State.Strict
 import Data.ByteString.Lazy.Char8 ( pack )
@@ -37,7 +36,7 @@ import Data.Default
 import Data.Maybe
 import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Pandoc.Builder
-import Text.Pandoc.Class (PandocMonad, insertMedia, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, insertMedia, report)
 import Text.Pandoc.Error
 import Text.Pandoc.Logging
 import Text.Pandoc.Options

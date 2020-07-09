@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE Arrows            #-}
 {-# LANGUAGE DeriveFoldable    #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -24,7 +23,6 @@ module Text.Pandoc.Readers.Odt.ContentReader
 , read_body
 ) where
 
-import Prelude
 import Control.Applicative hiding (liftA, liftA2, liftA3)
 import Control.Arrow
 
@@ -39,7 +37,7 @@ import Data.Semigroup (First(..), Option(..))
 import Text.TeXMath (readMathML, writeTeX)
 import qualified Text.XML.Light as XML
 
-import Text.Pandoc.Builder
+import Text.Pandoc.Builder hiding (underline)
 import Text.Pandoc.MediaBag (MediaBag, insertMedia)
 import Text.Pandoc.Shared
 import Text.Pandoc.Extensions (extensionsFromList, Extension(..))
@@ -923,8 +921,8 @@ post_process (Pandoc m blocks) =
   Pandoc m (post_process' blocks)
 
 post_process' :: [Block] -> [Block]
-post_process' (Table _ a w h r : Div ("", ["caption"], _) [Para inlines] : xs) =
-  Table inlines a w h r : post_process' xs
+post_process' (Table attr _ specs th tb tf : Div ("", ["caption"], _) blks : xs)
+  = Table attr (Caption Nothing blks) specs th tb tf : post_process' xs
 post_process' bs = bs
 
 read_body :: OdtReader _x (Pandoc, MediaBag)

@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Man
-   Copyright   : Copyright (C) 2007-2019 John MacFarlane
+   Copyright   : Copyright (C) 2007-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,14 +13,13 @@ Conversion of 'Pandoc' documents to roff man page format.
 
 -}
 module Text.Pandoc.Writers.Man ( writeMan ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.List (intersperse)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.Builder (deleteMeta)
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -141,8 +139,9 @@ blockToMan opts (CodeBlock _ str) = return $
 blockToMan opts (BlockQuote blocks) = do
   contents <- blockListToMan opts blocks
   return $ literal ".RS" $$ contents $$ literal ".RE"
-blockToMan opts (Table caption alignments widths headers rows) =
-  let aligncode AlignLeft    = "l"
+blockToMan opts (Table _ blkCapt specs thead tbody tfoot) =
+  let (caption, alignments, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+      aligncode AlignLeft    = "l"
       aligncode AlignRight   = "r"
       aligncode AlignCenter  = "c"
       aligncode AlignDefault = "l"
@@ -270,6 +269,9 @@ inlineListToMan opts lst = hcat <$> mapM (inlineToMan opts) lst
 inlineToMan :: PandocMonad m => WriterOptions -> Inline -> StateT WriterState m (Doc Text)
 inlineToMan opts (Span _ ils) = inlineListToMan opts ils
 inlineToMan opts (Emph lst) =
+  withFontFeature 'I' (inlineListToMan opts lst)
+-- Underline is not supported, so treat the same as Emph
+inlineToMan opts (Underline lst) =
   withFontFeature 'I' (inlineListToMan opts lst)
 inlineToMan opts (Strong lst) =
   withFontFeature 'B' (inlineListToMan opts lst)

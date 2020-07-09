@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Readers.Textile
    Copyright   : Copyright (C) 2010-2012 Paul Rivier
-                               2010-2019 John MacFarlane
+                               2010-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Paul Rivier <paul*rivier#demotera*com>
@@ -36,7 +35,6 @@ TODO : refactor common patterns across readers :
 
 
 module Text.Pandoc.Readers.Textile ( readTextile) where
-import Prelude
 import Control.Monad (guard, liftM)
 import Control.Monad.Except (throwError)
 import Data.Char (digitToInt, isUpper)
@@ -47,14 +45,14 @@ import Text.HTML.TagSoup (Tag (..), fromAttrib)
 import Text.HTML.TagSoup.Match
 import Text.Pandoc.Builder (Blocks, Inlines, trimInlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.CSS
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing
 import Text.Pandoc.Readers.HTML (htmlTag, isBlockTag, isInlineTag)
 import Text.Pandoc.Readers.LaTeX (rawLaTeXBlock, rawLaTeXInline)
-import Text.Pandoc.Shared (crFilter, trim, underlineSpan, tshow)
+import Text.Pandoc.Shared (crFilter, trim, tshow)
 
 -- | Parse a Textile text and return a Pandoc document.
 readTextile :: PandocMonad m
@@ -135,14 +133,14 @@ commentBlock = try $ do
   return mempty
 
 codeBlock :: PandocMonad m => ParserT Text ParserState m Blocks
-codeBlock = codeBlockBc <|> codeBlockPre
+codeBlock = codeBlockTextile <|> codeBlockHtml
 
-codeBlockBc :: PandocMonad m => ParserT Text ParserState m Blocks
-codeBlockBc = try $ do
-  string "bc."
+codeBlockTextile :: PandocMonad m => ParserT Text ParserState m Blocks
+codeBlockTextile = try $ do
+  string "bc." <|> string "pre."
   extended <- option False (True <$ char '.')
   char ' '
-  let starts = ["p", "table", "bq", "bc", "h1", "h2", "h3",
+  let starts = ["p", "table", "bq", "bc", "pre", "h1", "h2", "h3",
                 "h4", "h5", "h6", "pre", "###", "notextile"]
   let ender = choice $ map explicitBlockStart starts
   contents <- if extended
@@ -157,8 +155,8 @@ trimTrailingNewlines :: Text -> Text
 trimTrailingNewlines = T.dropWhileEnd (=='\n')
 
 -- | Code Blocks in Textile are between <pre> and </pre>
-codeBlockPre :: PandocMonad m => ParserT Text ParserState m Blocks
-codeBlockPre = try $ do
+codeBlockHtml :: PandocMonad m => ParserT Text ParserState m Blocks
+codeBlockHtml = try $ do
   (t@(TagOpen _ attrs),_) <- htmlTag (tagOpen (=="pre") (const True))
   result' <- T.pack <$> manyTill anyChar (htmlTag (tagClose (=="pre")))
   -- drop leading newline if any
@@ -245,7 +243,7 @@ genericListItemAtDepth :: PandocMonad m => Char -> Int -> ParserT Text ParserSta
 genericListItemAtDepth c depth = try $ do
   count depth (char c) >> attributes >> whitespace
   contents <- mconcat <$> many ((B.plain . mconcat <$> many1 inline) <|>
-                                try (newline >> codeBlockPre))
+                                try (newline >> codeBlockHtml))
   newline
   sublist <- option mempty (anyListAtDepth (depth + 1))
   return $ contents <> sublist
@@ -379,10 +377,13 @@ table = try $ do
                              _ -> (mempty, rawrows)
   let nbOfCols = maximum $ map length (headers:rows)
   let aligns = map minimum $ transpose $ map (map (snd . fst)) (headers:rows)
-  return $ B.table caption
-    (zip aligns (replicate nbOfCols 0.0))
-    (map snd headers)
-    (map (map snd) rows)
+  let toRow = Row nullAttr . map B.simpleCell
+      toHeaderRow l = if null l then [] else [toRow l]
+  return $ B.table (B.simpleCaption $ B.plain caption)
+    (zip aligns (replicate nbOfCols ColWidthDefault))
+    (TableHead nullAttr $ toHeaderRow $ map snd headers)
+    [TableBody nullAttr 0 [] $ map (toRow . map snd) rows]
+    (TableFoot nullAttr [])
 
 -- | Ignore markers for cols, thead, tfoot.
 ignorableRow :: PandocMonad m => ParserT Text ParserState m ()
@@ -450,7 +451,7 @@ inlineMarkup = choice [ simpleInline (string "??") (B.cite [])
                       , simpleInline (string "__") B.emph
                       , simpleInline (char '*') B.strong
                       , simpleInline (char '_') B.emph
-                      , simpleInline (char '+') underlineSpan
+                      , simpleInline (char '+') B.underline
                       , simpleInline (char '-' <* notFollowedBy (char '-')) B.strikeout
                       , simpleInline (char '^') B.superscript
                       , simpleInline (char '~') B.subscript

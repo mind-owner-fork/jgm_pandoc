@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Roff
-   Copyright   : Copyright (C) 2007-2019 John MacFarlane
+   Copyright   : Copyright (C) 2007-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -21,7 +20,6 @@ module Text.Pandoc.Writers.Roff (
     , escapeString
     , withFontFeature
     ) where
-import Prelude
 import Data.Char (ord, isAscii)
 import Control.Monad.State.Strict
 import qualified Data.Map as Map
@@ -29,7 +27,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import Data.String
 import Data.Maybe (fromMaybe, isJust, catMaybes)
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.DocLayout
 import Text.Printf (printf)

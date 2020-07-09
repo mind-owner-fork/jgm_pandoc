@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE PatternGuards       #-}
@@ -6,7 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.Writers.EPUB
-   Copyright   : Copyright (C) 2010-2019 John MacFarlane
+   Copyright   : Copyright (C) 2010-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,7 +15,6 @@
 Conversion of 'Pandoc' documents to EPUB.
 -}
 module Text.Pandoc.Writers.EPUB ( writeEPUB2, writeEPUB3 ) where
-import Prelude
 import Codec.Archive.Zip (Entry, addEntryToArchive, eRelativePath, emptyArchive,
                           fromArchive, fromEntry, toEntry)
 import Control.Applicative ( (<|>) )
@@ -37,8 +35,9 @@ import Network.HTTP (urlEncode)
 import System.FilePath (takeExtension, takeFileName, makeRelative)
 import Text.HTML.TagSoup (Tag (TagOpen), fromAttrib, parseTags)
 import Text.Pandoc.Builder (fromList, setMeta)
-import Text.Pandoc.Class (PandocMonad, report)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
+import qualified Text.Pandoc.Class.PandocPure as P
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Data.Time
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
@@ -51,7 +50,7 @@ import Text.Pandoc.Options (EPUBVersion (..), HTMLMathMethod (..),
 import Text.Pandoc.Shared (makeSections, normalizeDate, renderTags',
                            safeRead, stringify, trim, uniqueIdent, tshow)
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.Pandoc.UUID (getUUID)
+import Text.Pandoc.UUID (getRandomUUID)
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.Pandoc.Writers.HTML (writeHtmlStringForEPUB)
 import Text.Printf (printf)
@@ -164,8 +163,8 @@ getEPUBMetadata opts meta = do
   let addIdentifier m =
        if null (epubIdentifier m)
           then do
-            randomId <- (show . getUUID) <$> lift P.newStdGen
-            return $ m{ epubIdentifier = [Identifier randomId Nothing] }
+            randomId <- getRandomUUID
+            return $ m{ epubIdentifier = [Identifier (show randomId) Nothing] }
           else return m
   let addLanguage m =
        if null (epubLanguage m)
@@ -595,7 +594,8 @@ pandocToEPUB version opts doc = do
                             <> cssvars True <> vars } pdoc
          where (pdoc, bodyType) =
                  case bs of
-                     (Header _ (_,_,kvs) xs : _) ->
+                     (Div (_,"section":_,kvs)
+                       (Header _ _ xs : _) : _) ->
                        -- remove notes or we get doubled footnotes
                        (Pandoc (setMeta "title"
                            (walk removeNote $ fromList xs) nullMeta) bs,

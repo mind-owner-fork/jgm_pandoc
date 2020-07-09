@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.OPML
-   Copyright   : Copyright (C) 2013-2019 John MacFarlane
+   Copyright   : Copyright (C) 2013-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,7 +12,6 @@ Conversion of OPML to 'Pandoc' document.
 -}
 
 module Text.Pandoc.Readers.OPML ( readOPML ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (toUpper)
 import Data.Default
@@ -23,7 +21,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Pandoc.Builder
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Options
 import Text.Pandoc.Readers.HTML (readHtml)
 import Text.Pandoc.Readers.Markdown (readMarkdown)

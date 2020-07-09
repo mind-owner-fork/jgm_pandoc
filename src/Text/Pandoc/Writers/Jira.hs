@@ -1,9 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE PatternGuards #-}
 {- |
    Module      : Text.Pandoc.Writers.Jira
-   Copyright   : © 2010-2019 Albert Krewinkel, John MacFarlane
+   Copyright   : © 2010-2020 Albert Krewinkel, John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -16,21 +16,20 @@ JIRA:
 <https://jira.atlassian.com/secure/WikiRendererHelpAction.jspa?section=all>
 -}
 module Text.Pandoc.Writers.Jira ( writeJira ) where
-import Prelude
 import Control.Monad.Reader (ReaderT, ask, asks, runReaderT)
 import Control.Monad.State.Strict (StateT, evalStateT, gets, modify)
 import Data.Foldable (find)
 import Data.Text (Text)
 import Text.Jira.Parser (plainText)
 import Text.Jira.Printer (prettyBlocks, prettyInlines)
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options (WriterOptions (writerTemplate, writerWrapText),
                             WrapOption (..))
-import Text.Pandoc.Shared (linesToPara)
+import Text.Pandoc.Shared (linesToPara, stringify)
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Math (texMathToInlines)
-import Text.Pandoc.Writers.Shared (defField, metaToContext)
+import Text.Pandoc.Writers.Shared (defField, metaToContext, toLegacyTable)
 import Text.DocLayout (literal, render)
 import qualified Data.Text as T
 import qualified Text.Jira.Markup as Jira
@@ -99,7 +98,8 @@ toJiraBlocks blocks = do
         Plain xs             -> singleton . Jira.Para <$> toJiraInlines xs
         RawBlock fmt cs      -> rawBlockToJira fmt cs
         Null                 -> return mempty
-        Table _ _ _ hd body  -> singleton <$> do
+        Table _ blkCapt specs thead tbody tfoot -> singleton <$> do
+          let (_, _, _, hd, body) = toLegacyTable blkCapt specs thead tbody tfoot
           headerRow <- if all null hd
                        then pure Nothing
                        else Just <$> toRow Jira.HeaderCell hd
@@ -113,7 +113,7 @@ toJiraBlocks blocks = do
 
 toRow :: PandocMonad m
       => ([Jira.Block] -> Jira.Cell)
-      -> [TableCell]
+      -> [[Block]]
       -> JiraConverter m Jira.Row
 toRow mkCell cells = Jira.Row <$>
   mapM (fmap mkCell . toJiraBlocks) cells
@@ -193,10 +193,10 @@ toJiraInlines inlines = do
         Code _ cs          -> return . singleton $
                               Jira.Monospaced (escapeSpecialChars cs)
         Emph xs            -> styled Jira.Emphasis xs
-        Image _ _ (src, _) -> pure . singleton $ Jira.Image [] (Jira.URL src)
+        Underline xs       -> styled Jira.Insert xs
+        Image attr _ tgt   -> imageToJira attr (fst tgt) (snd tgt)
         LineBreak          -> pure . singleton $ Jira.Linebreak
-        Link _ xs (tgt, _) -> singleton . flip Jira.Link (Jira.URL tgt)
-                              <$> toJiraInlines xs
+        Link attr xs tgt   -> toJiraLink attr tgt xs
         Math mtype cs      -> mathToJira mtype cs
         Note bs            -> registerNotes bs
         Quoted qt xs       -> quotedToJira qt xs
@@ -208,7 +208,7 @@ toJiraInlines inlines = do
                                   then Jira.Linebreak
                                   else Jira.Space
         Space              -> pure . singleton $ Jira.Space
-        Span _attr xs      -> toJiraInlines xs
+        Span attr xs       -> spanToJira attr xs
         Str s              -> pure $ escapeSpecialChars s
         Strikeout xs       -> styled Jira.Strikeout xs
         Strong xs          -> styled Jira.Strong xs
@@ -232,6 +232,40 @@ escapeSpecialChars t = case plainText t of
   Right xs -> xs
   Left _  -> singleton $ Jira.Str t
 
+imageToJira :: PandocMonad m
+            => Attr -> Text -> Text
+            -> JiraConverter m [Jira.Inline]
+imageToJira (_, classes, kvs) src title =
+  let imgParams = if "thumbnail" `elem` classes
+                  then [Jira.Parameter "thumbnail" ""]
+                  else map (uncurry Jira.Parameter) kvs
+      imgParams' = if T.null title
+                   then imgParams
+                   else Jira.Parameter "title" title : imgParams
+  in pure . singleton $ Jira.Image imgParams' (Jira.URL src)
+
+-- | Creates a Jira Link element.
+toJiraLink :: PandocMonad m
+           => Attr
+           -> Target
+           -> [Inline]
+           -> JiraConverter m [Jira.Inline]
+toJiraLink (_, classes, _) (url, _) alias = do
+  let (linkType, url') = toLinkType url
+  description <- if url `elem` [stringify alias, "mailto:" <> stringify alias]
+                 then pure mempty
+                 else toJiraInlines alias
+  pure . singleton $ Jira.Link linkType description (Jira.URL url')
+ where
+  toLinkType url'
+    | Just email <- T.stripPrefix "mailto:" url' = (Jira.Email, email)
+    | "user-account" `elem` classes              = (Jira.User, dropTilde url)
+    | "attachment" `elem` classes                = (Jira.Attachment, url)
+    | otherwise                                  = (Jira.External, url)
+  dropTilde txt = case T.uncons txt of
+    Just ('~', username) -> username
+    _                    -> txt
+
 mathToJira :: PandocMonad m
            => MathType
            -> Text
@@ -252,6 +286,11 @@ quotedToJira qtype xs = do
                     SingleQuote -> "'"
   let surroundWithQuotes = (Jira.Str quoteChar :) . (++ [Jira.Str quoteChar])
   surroundWithQuotes <$> toJiraInlines xs
+
+spanToJira :: PandocMonad m
+           => Attr -> [Inline]
+           -> JiraConverter m [Jira.Inline]
+spanToJira (_, _classes, _) = toJiraInlines
 
 registerNotes :: PandocMonad m => [Block] -> JiraConverter m [Jira.Inline]
 registerNotes contents = do

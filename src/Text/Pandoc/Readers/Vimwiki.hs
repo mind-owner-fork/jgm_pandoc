@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE CPP #-}
 {- |
    Module      : Text.Pandoc.Readers.Vimwiki
-   Copyright   : Copyright (C) 2017-2019 Yuchen Pei
+   Copyright   : Copyright (C) 2017-2020 Yuchen Pei
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Yuchen Pei <me@ypei.me>
@@ -48,7 +47,6 @@ Conversion of vimwiki text to 'Pandoc' document.
 
 module Text.Pandoc.Readers.Vimwiki ( readVimwiki
                                  ) where
-import Prelude
 import Control.Monad (guard)
 import Control.Monad.Except (throwError)
 import Data.Default
@@ -66,7 +64,7 @@ import qualified Text.Pandoc.Builder as B (blockQuote, bulletList, code,
                                            softbreak, space, spanWith, str,
                                            strikeout, strong, subscript,
                                            superscript)
-import Text.Pandoc.Class (PandocMonad (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition (Attr, Block (BulletList, OrderedList),
                                Inline (Space), ListNumberDelim (..),
                                ListNumberStyle (..), Pandoc (..),
@@ -238,7 +236,11 @@ preformatted = try $ do
 makeAttr :: Text -> Attr
 makeAttr s =
   let xs = splitTextBy (`elem` (" \t" :: String)) s in
-    ("", [], mapMaybe nameValue xs)
+    ("", syntax xs, mapMaybe nameValue xs)
+
+syntax :: [Text] -> [Text]
+syntax (s:_) | not $ T.isInfixOf "=" s = [s]
+syntax _ = []
 
 nameValue :: Text -> Maybe (Text, Text)
 nameValue s =

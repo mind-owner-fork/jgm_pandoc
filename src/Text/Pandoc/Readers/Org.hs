@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org
-   Copyright   : Copyright (C) 2014-2019 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -11,12 +10,11 @@ Conversion of org-mode formatted plain text to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.Org ( readOrg ) where
 
-import Prelude
 import Text.Pandoc.Readers.Org.Blocks (blockList, meta)
 import Text.Pandoc.Readers.Org.ParserState (optionsToParserState)
 import Text.Pandoc.Readers.Org.Parsing (OrgParser, readWithM)
 
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing (reportLogMessages)

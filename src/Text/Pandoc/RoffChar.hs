@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.RoffChar
-   Copyright   : Copyright (C) 2007-2019 John MacFarlane
+   Copyright   : Copyright (C) 2007-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -17,7 +16,6 @@ module Text.Pandoc.RoffChar (
   , characterCodes
   , combiningAccents
   ) where
-import Prelude
 import qualified Data.Text as T
 
 -- | These are the escapes specifically mentioned in groff_man(7),

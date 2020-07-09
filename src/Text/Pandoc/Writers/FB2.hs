@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternGuards     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
 Module      : Text.Pandoc.Writers.FB2
 Copyright   : Copyright (C) 2011-2012 Sergey Astanin
-                            2012-2019 John MacFarlane
+                            2012-2020 John MacFarlane
 License     : GNU GPL, version 2 or above
 
 Maintainer  : John MacFarlane
@@ -19,7 +18,6 @@ FictionBook is an XML-based e-book format. For more information see:
 -}
 module Text.Pandoc.Writers.FB2 (writeFB2)  where
 
-import Prelude
 import Control.Monad (zipWithM)
 import Control.Monad.Except (catchError)
 import Control.Monad.State.Strict (StateT, evalStateT, get, gets, lift, liftM, modify)
@@ -36,14 +34,14 @@ import qualified Text.XML.Light as X
 import qualified Text.XML.Light.Cursor as XC
 import qualified Text.XML.Light.Input as XI
 
-import Text.Pandoc.Class (PandocMonad, report)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options (HTMLMathMethod (..), WriterOptions (..), def)
 import Text.Pandoc.Shared (capitalize, isURI, orderedListMarkers,
-                           makeSections, tshow)
-import Text.Pandoc.Writers.Shared (lookupMetaString)
+                           makeSections, tshow, stringify)
+import Text.Pandoc.Writers.Shared (lookupMetaString, toLegacyTable)
 
 -- | Data to be written at the end of the document:
 -- (foot)notes, URLs, references, images.
@@ -118,7 +116,7 @@ description meta' = do
         im <- insertImage InlineImage img
         return [el "coverpage" im]
   coverpage <- case lookupMeta "cover-image" meta' of
-                    Just (MetaInlines [Str s]) -> coverimage s
+                    Just (MetaInlines ils) -> coverimage (stringify ils)
                     Just (MetaString s) -> coverimage s
                     _       -> return []
   return $ el "description"
@@ -336,17 +334,18 @@ blockToXml h@Header{} = do
   report $ BlockNotRendered h
   return []
 blockToXml HorizontalRule = return [ el "empty-line" () ]
-blockToXml (Table caption aligns _ headers rows) = do
-    hd <- mkrow "th" headers aligns
+blockToXml (Table _ blkCapt specs thead tbody tfoot) = do
+    let (caption, aligns, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+    hd <- if null headers then pure [] else (:[]) <$> mkrow "th" headers aligns
     bd <- mapM (\r -> mkrow "td" r aligns) rows
     c <- el "emphasis" <$> cMapM toXml caption
-    return [el "table" (hd : bd), el "p" c]
+    return [el "table" (hd <> bd), el "p" c]
     where
-      mkrow :: PandocMonad m => String -> [TableCell] -> [Alignment] -> FBM m Content
+      mkrow :: PandocMonad m => String -> [[Block]] -> [Alignment] -> FBM m Content
       mkrow tag cells aligns' =
         el "tr" <$> mapM (mkcell tag) (zip cells aligns')
       --
-      mkcell :: PandocMonad m => String -> (TableCell, Alignment) -> FBM m Content
+      mkcell :: PandocMonad m => String -> ([Block], Alignment) -> FBM m Content
       mkcell tag (cell, align) = do
         cblocks <- cMapM blockToXml cell
         return $ el tag ([align_attr align], cblocks)
@@ -407,6 +406,7 @@ toXml :: PandocMonad m => Inline -> FBM m [Content]
 toXml (Str s) = return [txt s]
 toXml (Span _ ils) = cMapM toXml ils
 toXml (Emph ss) = list `liftM` wrap "emphasis" ss
+toXml (Underline ss) = list `liftM` wrap "underline" ss
 toXml (Strong ss) = list `liftM` wrap "strong" ss
 toXml (Strikeout ss) = list `liftM` wrap "strikethrough" ss
 toXml (Superscript ss) = list `liftM` wrap "sup" ss
@@ -530,6 +530,7 @@ list = (:[])
 plain :: Inline -> String
 plain (Str s)               = T.unpack s
 plain (Emph ss)             = cMap plain ss
+plain (Underline ss)        = cMap plain ss
 plain (Span _ ss)           = cMap plain ss
 plain (Strong ss)           = cMap plain ss
 plain (Strikeout ss)        = cMap plain ss

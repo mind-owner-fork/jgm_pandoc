@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Readers.CommonMark
-   Copyright   : Copyright (C) 2015-2019 John MacFarlane
+   Copyright   : Copyright (C) 2015-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -17,13 +16,12 @@ CommonMark is a strongly specified variant of Markdown: http://commonmark.org.
 module Text.Pandoc.Readers.CommonMark (readCommonMark)
 where
 
-import Prelude
 import CMarkGFM
 import Control.Monad.State
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Emoji (emojiToInline)
 import Text.Pandoc.Options
@@ -78,7 +76,12 @@ addBlocks opts = foldr (addBlock opts) []
 
 addBlock :: ReaderOptions -> Node -> [Block] -> [Block]
 addBlock opts (Node _ PARAGRAPH nodes) =
-  (Para (addInlines opts nodes) :)
+  case addInlines opts nodes of
+    [Image attr alt (src,tit)]
+      | isEnabled Ext_implicit_figures opts
+         -- the "fig:" prefix indicates an implicit figure
+      -> (Para [Image attr alt (src, "fig:" <> tit)] :)
+    ils -> (Para ils :)
 addBlock _ (Node _ THEMATIC_BREAK _) =
   (HorizontalRule :)
 addBlock opts (Node _ BLOCK_QUOTE nodes) =
@@ -113,31 +116,39 @@ addBlock opts (Node _ (LIST listAttrs) nodes) =
                      PAREN_DELIM  -> OneParen
         exts = readerExtensions opts
 addBlock opts (Node _ (TABLE alignments) nodes) =
-  (Table [] aligns widths headers rows :)
+  (Table
+    nullAttr
+    (Caption Nothing [])
+    (zip aligns widths)
+    (TableHead nullAttr headers)
+    [TableBody nullAttr 0 [] rows]
+    (TableFoot nullAttr []) :)
   where aligns = map fromTableCellAlignment alignments
         fromTableCellAlignment NoAlignment   = AlignDefault
         fromTableCellAlignment LeftAligned   = AlignLeft
         fromTableCellAlignment RightAligned  = AlignRight
         fromTableCellAlignment CenterAligned = AlignCenter
-        widths = replicate numcols 0.0
+        widths = replicate numcols ColWidthDefault
         numcols = if null rows'
                      then 0
-                     else maximum $ map length rows'
+                     else maximum $ map rowLength rows'
         rows' = map toRow $ filter isRow nodes
         (headers, rows) = case rows' of
-                               (h:rs) -> (h, rs)
+                               (h:rs) -> ([h], rs)
                                []     -> ([], [])
         isRow (Node _ TABLE_ROW _) = True
         isRow _                    = False
         isCell (Node _ TABLE_CELL _) = True
         isCell _                     = False
-        toRow (Node _ TABLE_ROW ns) = map toCell $ filter isCell ns
+        toRow (Node _ TABLE_ROW ns) = Row nullAttr $ map toCell $ filter isCell ns
         toRow (Node _ t _) = error $ "toRow encountered non-row " ++ show t
-        toCell (Node _ TABLE_CELL []) = []
+        toCell (Node _ TABLE_CELL []) = fromSimpleCell []
         toCell (Node _ TABLE_CELL (n:ns))
-          | isBlockNode n = addBlocks opts (n:ns)
-          | otherwise     = [Plain (addInlines opts (n:ns))]
+          | isBlockNode n = fromSimpleCell $ addBlocks opts (n:ns)
+          | otherwise     = fromSimpleCell [Plain (addInlines opts (n:ns))]
         toCell (Node _ t _) = error $ "toCell encountered non-cell " ++ show t
+        fromSimpleCell = Cell nullAttr AlignDefault 1 1
+        rowLength (Row _ body) = length body -- all cells are 1×1
 addBlock _ (Node _ TABLE_ROW _) = id -- handled in TABLE
 addBlock _ (Node _ TABLE_CELL _) = id -- handled in TABLE
 addBlock _ _ = id

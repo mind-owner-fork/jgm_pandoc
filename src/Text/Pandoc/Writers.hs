@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -41,6 +40,9 @@ module Text.Pandoc.Writers
     , writeHtml5String
     , writeICML
     , writeJATS
+    , writeJatsArchiving
+    , writeJatsArticleAuthoring
+    , writeJatsPublishing
     , writeJSON
     , writeJira
     , writeLaTeX
@@ -70,7 +72,6 @@ module Text.Pandoc.Writers
     , getWriter
     ) where
 
-import Prelude
 import Control.Monad.Except (throwError)
 import Control.Monad (unless)
 import Data.Aeson
@@ -146,7 +147,10 @@ writers = [
   ,("docbook"      , TextWriter writeDocbook5)
   ,("docbook4"     , TextWriter writeDocbook4)
   ,("docbook5"     , TextWriter writeDocbook5)
-  ,("jats"         , TextWriter writeJATS)
+  ,("jats"         , TextWriter writeJatsArchiving)
+  ,("jats_articleauthoring", TextWriter writeJatsArticleAuthoring)
+  ,("jats_publishing" , TextWriter writeJatsPublishing)
+  ,("jats_archiving" , TextWriter writeJatsArchiving)
   ,("jira"         , TextWriter writeJira)
   ,("opml"         , TextWriter writeOPML)
   ,("opendocument" , TextWriter writeOpenDocument)

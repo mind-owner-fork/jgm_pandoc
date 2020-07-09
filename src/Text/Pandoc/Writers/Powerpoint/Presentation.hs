@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE ViewPatterns               #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {- |
    Module      : Text.Pandoc.Writers.Powerpoint.Presentation
-   Copyright   : Copyright (C) 2017-2019 Jesse Rosenthal
+   Copyright   : Copyright (C) 2017-2020 Jesse Rosenthal
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -43,7 +42,6 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
                                                    ) where
 
 
-import Prelude
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.List (intercalate)
@@ -58,7 +56,8 @@ import Data.Time (UTCTime)
 import qualified Text.Pandoc.Shared as Shared -- so we don't overlap "Element"
 import Text.Pandoc.Shared (tshow)
 import Text.Pandoc.Writers.Shared (lookupMetaInlines, lookupMetaBlocks
-                                 , lookupMetaString, toTableOfContents)
+                                 , lookupMetaString, toTableOfContents
+                                 , toLegacyTable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Maybe (maybeToList, fromMaybe)
@@ -203,13 +202,17 @@ data Shape = Pic PicProps FilePath [ParaElem]
            | RawOOXMLShape T.Text
   deriving (Show, Eq)
 
-type Cell = [Paragraph]
+type TableCell = [Paragraph]
+
+-- TODO: remove when better handling of new
+-- tables is implemented
+type SimpleCell = [Block]
 
 data TableProps = TableProps { tblPrFirstRow :: Bool
                              , tblPrBandRow :: Bool
                              } deriving (Show, Eq)
 
-data Graphic = Tbl TableProps [Cell] [[Cell]]
+data Graphic = Tbl TableProps [TableCell] [[TableCell]]
   deriving (Show, Eq)
 
 
@@ -320,6 +323,9 @@ inlineToParElems (Str s) = do
 inlineToParElems (Emph ils) =
   local (\r -> r{envRunProps = (envRunProps r){rPropItalics=True}}) $
   inlinesToParElems ils
+inlineToParElems (Underline ils) =
+  local (\r -> r{envRunProps = (envRunProps r){rPropUnderline=True}}) $
+  inlinesToParElems ils
 inlineToParElems (Strong ils) =
   local (\r -> r{envRunProps = (envRunProps r){rPropBold=True}}) $
   inlinesToParElems ils
@@ -364,9 +370,6 @@ inlineToParElems (Note blks) = do
     modify $ \st -> st { stNoteIds = M.insert curNoteId blks notes }
     local (\env -> env{envRunProps = (envRunProps env){rLink = Just $ InternalTarget endNotesSlideId}}) $
       inlineToParElems $ Superscript [Str $ tshow curNoteId]
-inlineToParElems (Span (_, ["underline"], _) ils) =
-  local (\r -> r{envRunProps = (envRunProps r){rPropUnderline=True}}) $
-  inlinesToParElems ils
 inlineToParElems (Span _ ils) = inlinesToParElems ils
 inlineToParElems (Quoted quoteType ils) =
   inlinesToParElems $ [Str open] ++ ils ++ [Str close]
@@ -505,7 +508,7 @@ multiParBullet (b:bs) = do
     concatMapM blockToParagraphs bs
   return $ p ++ ps
 
-cellToParagraphs :: Alignment -> TableCell -> Pres [Paragraph]
+cellToParagraphs :: Alignment -> SimpleCell -> Pres [Paragraph]
 cellToParagraphs algn tblCell = do
   paras <- mapM blockToParagraphs tblCell
   let alignment = case algn of
@@ -516,7 +519,7 @@ cellToParagraphs algn tblCell = do
       paras' = map (map (\p -> p{paraProps = (paraProps p){pPropAlign = alignment}})) paras
   return $ concat paras'
 
-rowToParagraphs :: [Alignment] -> [TableCell] -> Pres [[Paragraph]]
+rowToParagraphs :: [Alignment] -> [SimpleCell] -> Pres [[Paragraph]]
 rowToParagraphs algns tblCells = do
   -- We have to make sure we have the right number of alignments
   let pairs = zip (algns ++ repeat AlignDefault) tblCells
@@ -539,7 +542,8 @@ blockToShape (Para (il:_))  | Link _ (il':_) target <- il
                             , Image attr ils (url, _) <- il' =
       (withAttr attr . Pic def{picPropLink = Just $ ExternalTarget target} (T.unpack url))
       <$> inlinesToParElems ils
-blockToShape (Table caption algn _ hdrCells rows) = do
+blockToShape (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, algn, _, hdrCells, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlinesToParElems caption
   hdrCells' <- rowToParagraphs algn hdrCells
   rows' <- mapM (rowToParagraphs algn) rows

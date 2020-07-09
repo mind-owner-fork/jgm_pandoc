@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.MIME
-   Copyright   : Copyright (C) 2011-2019 John MacFarlane
+   Copyright   : Copyright (C) 2011-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,7 +12,6 @@ Mime type lookup.
 -}
 module Text.Pandoc.MIME ( MimeType, getMimeType, getMimeTypeDef,
                           extensionFromMimeType, mediaCategory ) where
-import Prelude
 import Data.List (isPrefixOf, isSuffixOf)
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -463,7 +461,7 @@ mimeTypesList =
            ,("ts","text/texmacs")
            ,("tsp","application/dsptype")
            ,("tsv","text/tab-separated-values")
-           ,("ttf","application/x-font-truetype")
+           ,("ttf","application/font-sfnt")
            ,("txt","text/plain")
            ,("udeb","application/x-debian-package")
            ,("uls","text/iuls")

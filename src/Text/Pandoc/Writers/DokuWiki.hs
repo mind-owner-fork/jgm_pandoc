@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.DokuWiki
-   Copyright   : Copyright (C) 2008-2019 John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Clare Macrae <clare.macrae@googlemail.com>
@@ -23,7 +22,6 @@ DokuWiki:  <https://www.dokuwiki.org/dokuwiki>
 -}
 
 module Text.Pandoc.Writers.DokuWiki ( writeDokuWiki ) where
-import Prelude
 import Control.Monad (zipWithM)
 import Control.Monad.Reader (ReaderT, asks, local, runReaderT)
 import Control.Monad.State.Strict (StateT, evalStateT)
@@ -31,7 +29,7 @@ import Data.Default (Default (..))
 import Data.List (intersect, transpose)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -40,7 +38,7 @@ import Text.Pandoc.Shared (camelCaseToHyphenated, escapeURI, isURI, linesToPara,
                            removeFormatting, trimr, tshow)
 import Text.Pandoc.Templates (renderTemplate)
 import Text.DocLayout (render, literal)
-import Text.Pandoc.Writers.Shared (defField, metaToContext)
+import Text.Pandoc.Writers.Shared (defField, metaToContext, toLegacyTable)
 
 data WriterState = WriterState {
   }
@@ -168,7 +166,8 @@ blockToDokuWiki opts (BlockQuote blocks) = do
      then return $ T.unlines $ map ("> " <>) $ T.lines contents
      else return $ "<HTML><blockquote>\n" <> contents <> "</blockquote></HTML>"
 
-blockToDokuWiki opts (Table capt aligns _ headers rows) = do
+blockToDokuWiki opts (Table _ blkCapt specs thead tbody tfoot) = do
+  let (capt, aligns, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   captionDoc <- if null capt
                    then return ""
                    else do
@@ -402,6 +401,10 @@ inlineToDokuWiki opts (Span _attrs ils) =
 inlineToDokuWiki opts (Emph lst) = do
   contents <- inlineListToDokuWiki opts lst
   return $ "//" <> contents <> "//"
+
+inlineToDokuWiki opts (Underline lst) = do
+  contents <- inlineListToDokuWiki opts lst
+  return $ "__" <> contents <> "__"
 
 inlineToDokuWiki opts (Strong lst) = do
   contents <- inlineListToDokuWiki opts lst

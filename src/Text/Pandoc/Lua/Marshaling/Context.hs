@@ -1,11 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude    #-}
-{-# LANGUAGE FlexibleInstances    #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 {- |
    Module      : Text.Pandoc.Lua.Marshaling.Context
-   Copyright   : © 2012-2019 John MacFarlane
-                 © 2017-2019 Albert Krewinkel
+   Copyright   : © 2012-2020 John MacFarlane
+                 © 2017-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -15,7 +12,6 @@ Marshaling instance for doctemplates Context and its components.
 -}
 module Text.Pandoc.Lua.Marshaling.Context () where
 
-import Prelude
 import qualified Foreign.Lua as Lua
 import Foreign.Lua (Pushable)
 import Text.DocTemplates (Context(..), Val(..), TemplateTarget)

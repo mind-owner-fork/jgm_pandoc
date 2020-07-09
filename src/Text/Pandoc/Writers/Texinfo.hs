@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Texinfo
-   Copyright   : Copyright (C) 2008-2019 John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 John MacFarlane
                                2012 Peter Wang
    License     : GNU GPL, version 2 or above
 
@@ -13,7 +12,6 @@
 Conversion of 'Pandoc' format into Texinfo.
 -}
 module Text.Pandoc.Writers.Texinfo ( writeTexinfo ) where
-import Prelude
 import Control.Monad.Except (throwError)
 import Control.Monad.State.Strict
 import Data.Char (chr, ord)
@@ -24,7 +22,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Network.URI (unEscapeString)
 import System.FilePath
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
 import Text.Pandoc.ImageSize
@@ -230,7 +228,8 @@ blockToTexinfo (Header level (ident,_,_) lst)
       seccmd 4 = return "@subsubsection "
       seccmd _ = throwError $ PandocSomeError "illegal seccmd level"
 
-blockToTexinfo (Table caption aligns widths heads rows) = do
+blockToTexinfo (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, heads, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   headers <- if all null heads
                 then return empty
                 else tableHeadToTexinfo aligns heads
@@ -392,6 +391,10 @@ inlineToTexinfo (Span _ lst) =
 
 inlineToTexinfo (Emph lst) =
   inCmd "emph" <$> inlineListToTexinfo lst
+
+-- Underline isn't supported, fall back to Emph
+inlineToTexinfo (Underline lst) =
+  inlineToTexinfo (Emph lst)
 
 inlineToTexinfo (Strong lst) =
   inCmd "strong" <$> inlineListToTexinfo lst

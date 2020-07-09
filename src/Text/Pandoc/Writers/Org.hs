@@ -1,10 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternGuards #-}
 {- |
    Module      : Text.Pandoc.Writers.Org
    Copyright   : © 2010-2015 Puneeth Chaganti <punchagan@gmail.com>
-                   2010-2019 John MacFarlane <jgm@berkeley.edu>
-                   2016-2019 Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
+                   2010-2020 John MacFarlane <jgm@berkeley.edu>
+                   2016-2020 Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -16,13 +16,12 @@ Conversion of 'Pandoc' documents to Emacs Org-Mode.
 Org-Mode:  <http://orgmode.org>
 -}
 module Text.Pandoc.Writers.Org (writeOrg) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isAlphaNum)
 import Data.List (intersect, intersperse, partition, transpose)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -100,36 +99,7 @@ blockToOrg :: PandocMonad m
            => Block         -- ^ Block element
            -> Org m (Doc Text)
 blockToOrg Null = return empty
-blockToOrg (Div (_,classes@(cls:_),kvs) bs) | "drawer" `elem` classes = do
-  contents <- blockListToOrg bs
-  let drawerNameTag = ":" <> literal cls <> ":"
-  let keys = vcat $ map (\(k,v) ->
-                       ":" <> literal k <> ":"
-                       <> space <> literal v) kvs
-  let drawerEndTag = text ":END:"
-  return $ drawerNameTag $$ cr $$ keys $$
-           blankline $$ contents $$
-           blankline $$ drawerEndTag $$
-           blankline
-blockToOrg (Div (ident, classes, kv) bs) = do
-  contents <- blockListToOrg bs
-  -- if one class looks like the name of a greater block then output as such:
-  -- The ID, if present, is added via the #+NAME keyword; other classes and
-  -- key-value pairs are kept as #+ATTR_HTML attributes.
-  let isGreaterBlockClass = (`elem` ["center", "quote"]) . T.toLower
-      (blockTypeCand, classes') = partition isGreaterBlockClass classes
-  return $ case blockTypeCand of
-    (blockType:classes'') ->
-      blankline $$ attrHtml (ident, classes'' <> classes', kv) $$
-      "#+BEGIN_" <> literal blockType $$ contents $$
-      "#+END_" <> literal blockType $$ blankline
-    _                     ->
-      -- fallback with id: add id as an anchor if present, discard classes and
-      -- key-value pairs, unwrap the content.
-      let contents' = if not (T.null ident)
-                      then "<<" <> literal ident <> ">>" $$ contents
-                      else contents
-      in blankline $$ contents' $$ blankline
+blockToOrg (Div attr bs) = divToOrg attr bs
 blockToOrg (Plain inlines) = inlineListToOrg inlines
 -- title beginning with fig: indicates that the image is a figure
 blockToOrg (Para [Image attr txt (src,tgt)])
@@ -185,7 +155,8 @@ blockToOrg (BlockQuote blocks) = do
   contents <- blockListToOrg blocks
   return $ blankline $$ "#+BEGIN_QUOTE" $$
            nest 2 contents $$ "#+END_QUOTE" $$ blankline
-blockToOrg (Table caption' _ _ headers rows) =  do
+blockToOrg (Table _ blkCapt specs thead tbody tfoot) =  do
+  let (caption', _, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption'' <- inlineListToOrg caption'
   let caption = if null caption'
                    then empty
@@ -288,6 +259,63 @@ propertiesDrawer (ident, classes, kv) =
    kvToOrgProperty (key, value) =
      text ":" <> literal key <> text ": " <> literal value <> cr
 
+-- | The different methods to represent a Div block.
+data DivBlockType
+  = GreaterBlock Text Attr   -- ^ Greater block like @center@ or @quote@.
+  | Drawer Text Attr         -- ^ Org drawer with of given name; keeps
+                             --   key-value pairs.
+  | UnwrappedWithAnchor Text -- ^ Not mapped to other type, only
+                             --   identifier is retained (if any).
+
+-- | Gives the most suitable method to render a list of blocks
+-- with attributes.
+divBlockType :: Attr-> DivBlockType
+divBlockType (ident, classes, kvs)
+  -- if any class is named "drawer", then output as org :drawer:
+  | ([_], drawerName:classes') <- partition (== "drawer") classes
+  = Drawer drawerName (ident, classes', kvs)
+  -- if any class is either @center@ or @quote@, then use a org block.
+  | (blockName:classes'', classes') <- partition isGreaterBlockClass classes
+  = GreaterBlock blockName (ident, classes' <> classes'', kvs)
+  -- if no better method is found, unwrap div and set anchor
+  | otherwise
+  = UnwrappedWithAnchor ident
+ where
+  isGreaterBlockClass :: Text -> Bool
+  isGreaterBlockClass = (`elem` ["center", "quote"]) . T.toLower
+
+-- | Converts a Div to an org-mode element.
+divToOrg :: PandocMonad m
+         => Attr -> [Block] -> Org m (Doc Text)
+divToOrg attr bs = do
+  contents <- blockListToOrg bs
+  case divBlockType attr of
+    GreaterBlock blockName attr' ->
+      -- Write as greater block. The ID, if present, is added via
+      -- the #+NAME keyword; other classes and key-value pairs
+      -- are kept as #+ATTR_HTML attributes.
+      return $ blankline $$ attrHtml attr'
+            $$ "#+BEGIN_" <> literal blockName
+            $$ contents
+            $$ "#+END_" <> literal blockName $$ blankline
+    Drawer drawerName (_,_,kvs) -> do
+      -- Write as drawer. Only key-value pairs are retained.
+      let keys = vcat $ map (\(k,v) ->
+                               ":" <> literal k <> ":"
+                              <> space <> literal v) kvs
+      return $ ":" <> literal drawerName <> ":" $$ cr
+            $$ keys $$ blankline
+            $$ contents $$ blankline
+            $$ text ":END:" $$ blankline
+    UnwrappedWithAnchor ident -> do
+      -- Unwrap the div. All attributes are discarded, except for
+      -- the identifier, which is added as an anchor before the
+      -- div contents.
+      let contents' = if T.null ident
+                      then contents
+                      else  "<<" <> literal ident <> ">>" $$ contents
+      return (blankline $$ contents' $$ blankline)
+
 attrHtml :: Attr -> Doc Text
 attrHtml (""   , []     , []) = mempty
 attrHtml (ident, classes, kvs) =
@@ -330,6 +358,9 @@ inlineToOrg (Span _ lst) =
 inlineToOrg (Emph lst) = do
   contents <- inlineListToOrg lst
   return $ "/" <> contents <> "/"
+inlineToOrg (Underline lst) = do
+  contents <- inlineListToOrg lst
+  return $ "_" <> contents <> "_"
 inlineToOrg (Strong lst) = do
   contents <- inlineListToOrg lst
   return $ "*" <> contents <> "*"

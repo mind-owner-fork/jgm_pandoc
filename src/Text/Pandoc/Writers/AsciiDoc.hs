@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.AsciiDoc
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -20,7 +19,6 @@ that it has omitted the construct.
 AsciiDoc:  <http://www.methods.co.nz/asciidoc/>
 -}
 module Text.Pandoc.Writers.AsciiDoc (writeAsciiDoc, writeAsciiDoctor) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isPunctuation, isSpace)
 import Data.List (intercalate, intersperse)
@@ -28,7 +26,7 @@ import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Text (Text)
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -193,7 +191,8 @@ blockToAsciiDoc opts (BlockQuote blocks) = do
                      else contents
   let bar = text "____"
   return $ bar $$ chomp contents' $$ bar <> blankline
-blockToAsciiDoc opts (Table caption aligns widths headers rows) =  do
+blockToAsciiDoc opts (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlineListToAsciiDoc opts caption
   let caption'' = if null caption
                      then empty
@@ -300,7 +299,7 @@ blockToAsciiDoc opts (Div (ident,classes,_) bs) = do
                       chomp admonitionBody $$
                       "===="
          _ -> blockListToAsciiDoc opts bs
-  return $ identifier $$ contents
+  return $ identifier $$ contents $$ blankline
 
 -- | Convert bullet list item (list of blocks) to asciidoc.
 bulletListItemToAsciiDoc :: PandocMonad m
@@ -434,6 +433,9 @@ inlineToAsciiDoc opts (Emph lst) = do
   isIntraword <- gets intraword
   let marker = if isIntraword then "__" else "_"
   return $ marker <> contents <> marker
+inlineToAsciiDoc opts (Underline lst) = do
+  contents <- inlineListToAsciiDoc opts lst
+  return $ "+++" <> contents <> "+++"
 inlineToAsciiDoc opts (Strong lst) = do
   contents <- inlineListToAsciiDoc opts lst
   isIntraword <- gets intraword
@@ -492,7 +494,6 @@ inlineToAsciiDoc _ il@(RawInline f s)
   | otherwise         = do
       report $ InlineNotRendered il
       return empty
-  | otherwise       = return empty
 inlineToAsciiDoc _ LineBreak = return $ " +" <> cr
 inlineToAsciiDoc _ Space = return space
 inlineToAsciiDoc opts SoftBreak =

@@ -8,7 +8,7 @@ on:
 jobs:
   linux:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     steps:
     - uses: actions/checkout@v1
     - name: Create linux package
@@ -24,7 +24,7 @@ jobs:
 
   windows:
 
-    runs-on: windows-latest
+    runs-on: windows-2019
     strategy:
       fail-fast: true
       matrix:
@@ -35,8 +35,9 @@ jobs:
             stack_opts: "-j1"
           - osarch: "windows-i386"
             arch: "x86"
-            choco_opts: "--x86"
+            choco_opts: "--x86 --version 2.1.3.20190715"
             stack_opts: "-j1 --flag hslua:lua_32bits"
+            # we use stack 2.1.3 because 2.3.1 doesn't support i386
 
     steps:
     - uses: actions/checkout@v1
@@ -94,7 +95,7 @@ jobs:
 
   macos:
 
-    runs-on: macOS-latest
+    runs-on: macOS-10.15
 
     steps:
     - uses: actions/checkout@v1
@@ -111,14 +112,12 @@ jobs:
           export VERSION=$(grep '^[Vv]ersion:' pandoc.cabal | awk '{print $$2;}')
           export BASEDIR=$(pwd)
           export ARTIFACTS=${BASEDIR}/macos-release-candidate
-          export DIST=${BASEDIR}/macos_package
           export RESOURCES=${ARTIFACTS}/Resources
-          export ROOT=${DIST}/pandoc
+          export ROOT=${ARTIFACTS}/pandoc
           export DEST=${ROOT}/usr/local
           export ME=$(whoami)
           export BASE=pandoc-$VERSION
           mkdir -p ${ARTIFACTS}
-          mkdir -p ${DIST}
           mkdir -p ${RESOURCES}
           mkdir -p ${DEST}/bin
           mkdir -p ${DEST}/share/man/man1
@@ -131,17 +130,10 @@ jobs:
             $DEST/share/man/man1/pandoc-citeproc.1
           ${DEST}/bin/pandoc -t html5 -s COPYING.md -Vpagetitle=License \
             -o ${RESOURCES}/license.html
+          chown -R $ME:staff ${ROOT}
           sed -e "s/PANDOCVERSION/${VERSION}/" macos/distribution.xml.in > ${ARTIFACTS}/distribution.xml
-
-          chown -R $ME:staff ${DIST}
-          echo Creating pkg...
-          pkgbuild --root $ROOT --identifier net.johnmacfarlane.pandoc --version $VERSION --ownership recommended ${ARTIFACTS}/pandoc.pkg
-          echo Creating zip...
-          cd ${DEST}
-          cd ..
-          mv local ${BASE}
-          zip -r ${ARTIFACTS}/${BASE}-macOS.zip ${BASE}
-          echo -e "${BASE}-macOS.pkg: pandoc.pkg\n\tproductbuild --distribution distribution.xml --resources Resources --package-path $< --version ${VERSION} --sign 'Developer ID Installer: John Macfarlane' -o \$@\n" > ${ARTIFACTS}/Makefile
+          cp macos/Makefile ${ARTIFACTS}/
+          echo ${VERSION} > ${ARTIFACTS}/version.txt
     - uses: actions/upload-artifact@master
       with:
         name: macos-release-candidate

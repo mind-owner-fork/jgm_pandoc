@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.OOXML
-   Copyright   : Copyright (C) 2012-2019 John MacFarlane
+   Copyright   : Copyright (C) 2012-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -24,7 +23,6 @@ module Text.Pandoc.Writers.OOXML ( mknode
                                  , fitToPage
                                  ) where
 
-import Prelude
 import Codec.Archive.Zip
 import Control.Monad.Reader
 import Control.Monad.Except (throwError)
@@ -34,7 +32,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Maybe (mapMaybe)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.XML.Light as XML
 

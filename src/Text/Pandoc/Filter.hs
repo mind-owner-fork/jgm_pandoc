@@ -1,11 +1,10 @@
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Filter
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -19,11 +18,11 @@ module Text.Pandoc.Filter
   , applyFilters
   ) where
 
-import Prelude
 import System.CPUTime (getCPUTime)
 import Data.Aeson.TH (deriveJSON, defaultOptions)
 import GHC.Generics (Generic)
-import Text.Pandoc.Class (PandocIO, report, getVerbosity)
+import Text.Pandoc.Class.PandocIO (PandocIO)
+import Text.Pandoc.Class.PandocMonad (report, getVerbosity)
 import Text.Pandoc.Definition (Pandoc)
 import Text.Pandoc.Options (ReaderOptions)
 import Text.Pandoc.Logging
@@ -75,10 +74,10 @@ applyFilters ropts filters args d = do
   withMessages f action = do
     verbosity <- getVerbosity
     when (verbosity == INFO) $ report $ RunningFilter f
-    starttime <- toMilliseconds <$> liftIO getCPUTime
+    starttime <- liftIO getCPUTime
     res <- action
-    endtime <- toMilliseconds <$> liftIO getCPUTime
-    when (verbosity == INFO) $ report $ FilterCompleted f (endtime - starttime)
+    endtime <- liftIO getCPUTime
+    when (verbosity == INFO) $ report $ FilterCompleted f $ toMilliseconds $ endtime - starttime
     return res
   toMilliseconds picoseconds = picoseconds `div` 1000000000
 

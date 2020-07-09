@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude  #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {- |
    Module      : Text.Pandoc.Error
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -19,7 +18,6 @@ module Text.Pandoc.Error (
   PandocError(..),
   handleError) where
 
-import Prelude
 import Control.Exception (Exception)
 import Data.Typeable (Typeable)
 import Data.Word (Word8)
@@ -49,6 +47,7 @@ data PandocError = PandocIOError Text IOError
                  | PandocPDFProgramNotFoundError Text
                  | PandocPDFError Text
                  | PandocFilterError Text Text
+                 | PandocLuaError Text
                  | PandocCouldNotFindDataFileError Text
                  | PandocResourceNotFound Text
                  | PandocTemplateError Text
@@ -102,6 +101,7 @@ handleError (Left e) =
     PandocPDFError logmsg -> err 43 $ "Error producing PDF.\n" <> logmsg
     PandocFilterError filtername msg -> err 83 $ "Error running filter " <>
         filtername <> ":\n" <> msg
+    PandocLuaError msg -> err 84 $ "Error running Lua:\n" <> msg
     PandocCouldNotFindDataFileError fn -> err 97 $
         "Could not find data file " <> fn
     PandocResourceNotFound fn -> err 99 $

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.LaTeX
-   Copyright   : © 2006-2019 John MacFarlane
+   Copyright   : © 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -36,8 +36,14 @@ infix 4 =:
 (=:) = test latex
 
 simpleTable' :: [Alignment] -> [[Blocks]] -> Blocks
-simpleTable' aligns = table "" (zip aligns (repeat 0.0))
-                      (map (const mempty) aligns)
+simpleTable' aligns rows
+  = table emptyCaption
+          (zip aligns (repeat ColWidthDefault))
+          (TableHead nullAttr [])
+          [TableBody nullAttr 0 [] $ map toRow rows]
+          (TableFoot nullAttr [])
+  where
+    toRow = Row nullAttr . map simpleCell
 
 tokUntokRt :: String -> Bool
 tokUntokRt s = untokenize (tokenize "random" t) == t

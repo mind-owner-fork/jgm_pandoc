@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE ViewPatterns      #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.EPUB
-   Copyright   : Copyright (C) 2014-2019 Matthew Pickering
+   Copyright   : Copyright (C) 2014-2020 Matthew Pickering
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -18,7 +17,6 @@ module Text.Pandoc.Readers.EPUB
   (readEPUB)
   where
 
-import Prelude
 import Codec.Archive.Zip (Archive (..), Entry, findEntryByPath, fromEntry,
                           toArchiveOrFail)
 import Control.DeepSeq (NFData, deepseq)
@@ -35,7 +33,7 @@ import Network.URI (unEscapeString)
 import System.FilePath (dropFileName, dropFileName, normalise, splitFileName,
                         takeFileName, (</>))
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad, insertMedia)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, insertMedia)
 import Text.Pandoc.Definition hiding (Attr)
 import Text.Pandoc.Error
 import Text.Pandoc.Extensions (Extension (Ext_raw_html), enableExtension)

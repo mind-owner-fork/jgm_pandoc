@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards     #-}
 {- |
    Module      : Text.Pandoc.Writers.Docbook
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,10 +12,9 @@
 Conversion of 'Pandoc' documents to Docbook XML.
 -}
 module Text.Pandoc.Writers.TEI (writeTEI) where
-import Prelude
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Highlighting (languages, languagesByExtension)
 import Text.Pandoc.ImageSize
@@ -196,8 +194,9 @@ blockToTEI _ HorizontalRule = return $
 -- | TEI Tables
 -- TEI Simple's tables are composed of cells and rows; other
 -- table info in the AST is here lossily discard.
-blockToTEI opts (Table _ _ _ headers rows) = do
-  headers' <- tableHeadersToTEI opts headers
+blockToTEI opts (Table _ blkCapt specs thead tbody tfoot) = do
+  let (_, _, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+  headers' <- if null headers then pure mempty else tableHeadersToTEI opts headers
   rows' <- mapM (tableRowToTEI opts) rows
   return $ inTags True "table" [] $ headers' $$ vcat rows'
 
@@ -232,6 +231,8 @@ inlineToTEI :: PandocMonad m => WriterOptions -> Inline -> m (Doc Text)
 inlineToTEI _ (Str str) = return $ literal $ escapeStringForXML str
 inlineToTEI opts (Emph lst) =
   inTags False "hi" [("rendition","simple:italic")] <$> inlinesToTEI opts lst
+inlineToTEI opts (Underline lst) =
+  inTags False "hi" [("rendition","simple:underline")] <$> inlinesToTEI opts lst
 inlineToTEI opts (Strong lst) =
   inTags False "hi" [("rendition", "simple:bold")] <$> inlinesToTEI opts lst
 inlineToTEI opts (Strikeout lst) =

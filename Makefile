@@ -55,7 +55,7 @@ fix_spacing:
 	for f in $(SOURCEFILES); do printf '%s\n' "`cat $$f`" | sed -e 's/  *$$//' > $$f.tmp; mv $$f.tmp $$f; done
 
 changes_github:
-	pandoc --filter tools/extract-changes.hs changelog.md -t gfm --wrap=none | sed -e 's/\\#/#/g' | pbcopy
+	pandoc --filter tools/extract-changes.hs changelog.md -t gfm --wrap=none --template tools/changes_template.html | sed -e 's/\\#/#/g' | pbcopy
 
 dist: man/pandoc.1
 	cabal sdist
@@ -113,14 +113,6 @@ man/pandoc.1: MANUAL.txt man/pandoc.1.before man/pandoc.1.after
 		--variable footer="pandoc $(version)" \
 		-o $@
 
-doc/lua-filters.md: tools/ldoc.ltp data/pandoc.lua tools/update-lua-docs.lua
-	cp $@ $@.tmp
-	pandoc -t markdown --columns=64 --atx-headers  \
-	       -f markdown -t markdown --standalone\
-         --lua-filter tools/update-lua-docs.lua \
-	       -o $@ $@.tmp
-	rm $@.tmp
-
 README.md: README.template MANUAL.txt tools/update-readme.lua
 	pandoc --lua-filter tools/update-readme.lua --reference-links \
 	      --reference-location=section -t gfm $< -o $@
@@ -131,9 +123,9 @@ download_stats:
 
 pandoc-templates:
 	rm ../pandoc-templates/default.* ; \
-	cp data/templates/default.* ../pandoc-templates/ ; \
+	cp data/templates/default.* data/templates/README.markdown data/templates/styles.* ../pandoc-templates/ ; \
 	pushd ../pandoc-templates/ && \
-	git add default.* && \
+	git add default.* README.markdown styles.* && \
 	git commit -m "Updated templates for pandoc $(version)" && \
 	popd
 

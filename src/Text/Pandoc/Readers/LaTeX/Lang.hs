@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.LaTeX.Lang
-   Copyright   : Copyright (C) 2018-2019 John MacFarlane
+   Copyright   : Copyright (C) 2018-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -17,7 +16,6 @@ module Text.Pandoc.Readers.LaTeX.Lang
   , babelLangToBCP47
   )
 where
-import Prelude
 import qualified Data.Map as M
 import qualified Data.Text as T
 import Text.Pandoc.BCP47 (Lang(..))

@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Man
-   Copyright   : Copyright (C) 2018-2019 Yan Pashkovsky and John MacFarlane
+   Copyright   : Copyright (C) 2018-2020 Yan Pashkovsky and John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Yan Pashkovsky <yanp.bugz@gmail.com>
@@ -14,17 +14,16 @@ Conversion of man to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.Man (readMan) where
 
-import Prelude
 import Data.Char (toLower)
 import Data.Default (Default)
 import Control.Monad (liftM, mzero, guard, void)
 import Control.Monad.Trans (lift)
 import Control.Monad.Except (throwError)
-import Text.Pandoc.Class (PandocMonad(..), report)
 import Data.Maybe (catMaybes, isJust)
 import Data.List (intersperse, intercalate)
 import qualified Data.Text as T
 import Text.Pandoc.Builder as B
+import Text.Pandoc.Class.PandocMonad (PandocMonad(..), report)
 import Text.Pandoc.Error (PandocError (PandocParsecError))
 import Text.Pandoc.Logging (LogMessage(..))
 import Text.Pandoc.Options
@@ -108,11 +107,12 @@ parseTable = do
       bodyRows <- mapM (mapM parseTableCell . snd) bodyRows'
       isPlainTable <- tableCellsPlain <$> getState
       let widths = if isPlainTable
-                      then repeat 0.0
-                      else repeat ((1.0 / fromIntegral (length alignments))
-                                   :: Double)
-      return $ B.table mempty (zip alignments widths)
-                  headerRow bodyRows) <|> fallback pos
+                      then repeat ColWidthDefault
+                      else repeat $ ColWidth (1.0 / fromIntegral (length alignments))
+      return $ B.table B.emptyCaption (zip alignments widths)
+                  (TableHead nullAttr $ toHeaderRow headerRow)
+                  [TableBody nullAttr 0 [] $ map toRow bodyRows]
+                  (TableFoot nullAttr [])) <|> fallback pos
     [] -> fallback pos
 
  where
@@ -161,6 +161,8 @@ parseTable = do
       'r' -> Just AlignRight
       _   -> Nothing
 
+  toRow = Row nullAttr . map simpleCell
+  toHeaderRow l = if null l then [] else [toRow l]
 
 parseNewParagraph :: PandocMonad m => ManParser m Blocks
 parseNewParagraph = do

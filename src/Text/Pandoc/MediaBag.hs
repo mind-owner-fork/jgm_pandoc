@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {- |
    Module      : Text.Pandoc.MediaBag
-   Copyright   : Copyright (C) 2014-2015, 2017–2019 John MacFarlane
+   Copyright   : Copyright (C) 2014-2015, 2017–2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -22,7 +21,6 @@ module Text.Pandoc.MediaBag (
                      mediaDirectory,
                      mediaItems
                      ) where
-import Prelude
 import qualified Data.ByteString.Lazy as BL
 import Data.Data (Data)
 import qualified Data.Map as M

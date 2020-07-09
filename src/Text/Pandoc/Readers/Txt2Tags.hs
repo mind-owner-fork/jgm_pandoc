@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Txt2Tags
@@ -15,7 +14,6 @@ module Text.Pandoc.Readers.Txt2Tags ( readTxt2Tags
                                     )
                                     where
 
-import Prelude
 import Control.Monad (guard, void, when)
 import Control.Monad.Except (catchError, throwError)
 import Control.Monad.Reader (Reader, asks, runReader)
@@ -27,14 +25,13 @@ import qualified Data.Text as T
 import Data.Time.Format (formatTime)
 import Text.Pandoc.Builder (Blocks, Inlines, trimInlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Data.Time (defaultTimeLocale)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (space, spaces, uri)
-import Text.Pandoc.Shared (compactify, compactifyDL, crFilter, escapeURI,
-                           underlineSpan)
+import Text.Pandoc.Shared (compactify, compactifyDL, crFilter, escapeURI)
 
 type T2T = ParserT Text ParserState (Reader T2TMeta)
 
@@ -269,9 +266,13 @@ table = try $ do
   let size = maximum (map length rows')
   let rowsPadded = map (pad size) rows'
   let headerPadded = if null tableHeader then mempty else pad size tableHeader
-  return $ B.table mempty
-                    (zip aligns (replicate ncolumns 0.0))
-                      headerPadded rowsPadded
+  let toRow = Row nullAttr . map B.simpleCell
+      toHeaderRow l = if null l then [] else [toRow l]
+  return $ B.table B.emptyCaption
+                    (zip aligns (replicate ncolumns ColWidthDefault))
+                      (TableHead nullAttr $ toHeaderRow headerPadded)
+                      [TableBody nullAttr 0 [] $ map toRow rowsPadded]
+                      (TableFoot nullAttr [])
 
 pad :: (Monoid a) => Int -> [a] -> [a]
 pad n xs = xs ++ replicate (n - length xs) mempty
@@ -376,7 +377,7 @@ bold :: T2T Inlines
 bold = inlineMarkup inline B.strong '*' B.str
 
 underline :: T2T Inlines
-underline = inlineMarkup inline underlineSpan '_' B.str
+underline = inlineMarkup inline B.underline '_' B.str
 
 strike :: T2T Inlines
 strike = inlineMarkup inline B.strikeout '-' B.str

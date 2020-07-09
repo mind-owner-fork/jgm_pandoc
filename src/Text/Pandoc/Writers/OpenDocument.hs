@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards     #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.OpenDocument
-   Copyright   : Copyright (C) 2008-2019 Andrea Rossato and John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 Andrea Rossato and John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Andrea Rossato <andrea.rossato@ing.unitn.it>
@@ -15,7 +14,6 @@
 Conversion of 'Pandoc' documents to OpenDocument XML.
 -}
 module Text.Pandoc.Writers.OpenDocument ( writeOpenDocument ) where
-import Prelude
 import Control.Arrow ((***), (>>>))
 import Control.Monad.State.Strict hiding (when)
 import Data.Char (chr)
@@ -27,9 +25,10 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.BCP47 (Lang (..), parseBCP47)
-import Text.Pandoc.Class (PandocMonad, report, translateTerm,
-                          setTranslations, toLang)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report, translateTerm,
+                                      setTranslations, toLang)
 import Text.Pandoc.Definition
+import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
@@ -225,12 +224,18 @@ writeOpenDocument opts (Pandoc meta blocks) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
+  let meta' = case lookupMetaBlocks "abstract" meta of
+                [] -> meta
+                xs -> B.setMeta "abstract"
+                        (B.divWith ("",[],[("custom-style","Abstract")])
+                          (B.fromList xs))
+                        meta
   ((body, metadata),s) <- flip runStateT
         defaultWriterState $ do
            m <- metaToContext opts
                   (blocksToOpenDocument opts)
                   (fmap chomp . inlinesToOpenDocument opts)
-                  meta
+                  meta'
            b <- blocksToOpenDocument opts blocks
            return (b, m)
   let styles   = stTableStyles s ++ stParaStyles s ++ formulaStyles ++
@@ -351,8 +356,12 @@ blockToOpenDocument o bs
                                   then return empty
                                   else inParagraphTags =<< inlinesToOpenDocument o b
     | LineBlock      b <- bs = blockToOpenDocument o $ linesToPara b
-    | Div attr xs      <- bs = withLangFromAttr attr
-                                  (blocksToOpenDocument o xs)
+    | Div attr xs      <- bs = do
+        let (_,_,kvs) = attr
+        withLangFromAttr attr $
+          case lookup "custom-style" kvs of
+            Just sty -> withParagraphStyle o sty xs
+            _        -> blocksToOpenDocument o xs
     | Header     i (ident,_,_) b
                        <- bs = setFirstPara >> (inHeaderTags i ident
                                   =<< inlinesToOpenDocument o b)
@@ -361,7 +370,9 @@ blockToOpenDocument o bs
     | BulletList     b <- bs = setFirstPara >> bulletListToOpenDocument o b
     | OrderedList  a b <- bs = setFirstPara >> orderedList a b
     | CodeBlock    _ s <- bs = setFirstPara >> preformatted s
-    | Table  c a w h r <- bs = setFirstPara >> table c a w h r
+    | Table _ bc s th tb tf
+                       <- bs = let (c, a, w, h, r) = toLegacyTable bc s th tb tf
+                               in setFirstPara >> table c a w h r
     | HorizontalRule   <- bs = setFirstPara >> return (selfClosingTag "text:p"
                                 [ ("text:style-name", "Horizontal_20_Line") ])
     | RawBlock f     s <- bs = if f == Format "opendocument"
@@ -512,6 +523,7 @@ inlineToOpenDocument o ils
     LineBreak     -> return $ selfClosingTag "text:line-break" []
     Str         s -> return $ handleSpaces $ escapeStringForXML s
     Emph        l -> withTextStyle Italic $ inlinesToOpenDocument o l
+    Underline   l -> withTextStyle Under  $ inlinesToOpenDocument o l
     Strong      l -> withTextStyle Bold   $ inlinesToOpenDocument o l
     Strikeout   l -> withTextStyle Strike $ inlinesToOpenDocument o l
     Superscript l -> withTextStyle Sup    $ inlinesToOpenDocument o l
@@ -692,6 +704,7 @@ paraTableStyles t s (a:xs)
 
 data TextStyle = Italic
                | Bold
+               | Under
                | Strike
                | Sub
                | Sup
@@ -710,6 +723,9 @@ textStyleAttr m s
     | Bold   <- s = Map.insert "fo:font-weight" "bold" .
                     Map.insert "style:font-weight-asian" "bold" .
                     Map.insert "style:font-weight-complex" "bold" $ m
+    | Under  <- s = Map.insert "style:text-underline-style" "solid" .
+                    Map.insert "style:text-underline-width" "auto" .
+                    Map.insert "style:text-underline-color" "font-color" $ m
     | Strike <- s = Map.insert "style:text-line-through-style" "solid" m
     | Sub    <- s = Map.insert "style:text-position" "sub 58%" m
     | Sup    <- s = Map.insert "style:text-position" "super 58%" m

@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.App
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -23,7 +22,6 @@ module Text.Pandoc.App (
           , options
           , applyFilters
           ) where
-import Prelude
 import qualified Control.Exception as E
 import Control.Monad
 import Control.Monad.Trans
@@ -125,6 +123,8 @@ convertWithOpts opts = do
 
   runIO' $ do
     setUserDataDir datadir
+    setResourcePath (optResourcePath opts)
+
     setInputFiles (fromMaybe ["-"] (optInputFiles opts))
     setOutputFile (optOutputFile opts)
 
@@ -268,8 +268,9 @@ convertWithOpts opts = do
           writerName == "markdown_github") $
       report $ Deprecated "markdown_github" "Use gfm instead."
 
-    setResourcePath (optResourcePath opts)
     mapM_ (uncurry setRequestHeader) (optRequestHeaders opts)
+
+    setNoCheckCertificate (optNoCheckCertificate opts)
 
     doc <- sourceToDoc sources >>=
               (   (if isJust (optExtractMedia opts)

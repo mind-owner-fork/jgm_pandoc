@@ -1,8 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {- |
    Module      : Text.Pandoc.Lua
-   Copyright   : Copyright © 2017-2019 Albert Krewinkel
+   Copyright   : Copyright © 2017-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -15,13 +14,12 @@ module Text.Pandoc.Lua.Global
   , setGlobals
   ) where
 
-import Prelude
 import Data.Data (Data)
 import Foreign.Lua (Lua, Peekable, Pushable)
 import Foreign.Lua.Userdata ( ensureUserdataMetatable, pushAnyWithMetatable
                             , metatableName)
 import Paths_pandoc (version)
-import Text.Pandoc.Class (CommonState)
+import Text.Pandoc.Class.CommonState (CommonState)
 import Text.Pandoc.Definition (Pandoc (Pandoc), pandocTypesVersion)
 import Text.Pandoc.Lua.Marshaling ()
 import Text.Pandoc.Lua.Util (addFunction)

@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Text.Pandoc.Writers.Math
   ( texMathToInlines
@@ -8,9 +7,8 @@ module Text.Pandoc.Writers.Math
   )
 where
 
-import Prelude
 import qualified Data.Text as T
-import Text.Pandoc.Class
+import Text.Pandoc.Class.PandocMonad
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.TeXMath (DisplayType (..), Exp, readTeX, writePandoc)

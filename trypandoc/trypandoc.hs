@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Main
-   Copyright   : © 2014-2019 John MacFarlane <jgm@berkeley.edu>
+   Copyright   : © 2014-2020 John MacFarlane <jgm@berkeley.edu>
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -41,6 +41,9 @@ app req respond = do
   text <- getParam "text" >>= checkLength . fromMaybe T.empty
   fromFormat <- fromMaybe "" <$> getParam "from"
   toFormat <- fromMaybe "" <$> getParam "to"
+  standalone <- (==) "1" . fromMaybe "" <$> getParam "standalone"
+  compiledTemplate <- runIO . compileDefaultTemplate $ toFormat
+  let template = if standalone then either (const Nothing) Just compiledTemplate else Nothing
   let reader = case runPure $ getReader fromFormat of
                     Right (TextReader r, es) -> r readerOpts{
                        readerExtensions = es }
@@ -48,7 +51,7 @@ app req respond = do
                                   ++ T.unpack fromFormat
   let writer = case runPure $ getWriter toFormat of
                     Right (TextWriter w, es) -> w writerOpts{
-                       writerExtensions = es }
+                       writerExtensions = es, writerTemplate = template }
                     _ -> error $ "could not find writer for " ++
                            T.unpack toFormat
   let result = case runPure $ reader (tabFilter 4 text) >>= writer of

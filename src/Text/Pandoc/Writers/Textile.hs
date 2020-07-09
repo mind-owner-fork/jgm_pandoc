@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Textile
-   Copyright   : Copyright (C) 2010-2019 John MacFarlane
+   Copyright   : Copyright (C) 2010-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,12 +14,11 @@ Conversion of 'Pandoc' documents to Textile markup.
 Textile:  <http://thresholdstate.com/articles/4312/the-textile-reference-manual>
 -}
 module Text.Pandoc.Writers.Textile ( writeTextile ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -170,44 +168,44 @@ blockToTextile opts (BlockQuote blocks) = do
   contents <- blockListToTextile opts blocks
   return $ "<blockquote>\n\n" <> contents <> "\n</blockquote>\n"
 
-blockToTextile opts (Table [] aligns widths headers rows') |
-         all (==0) widths = do
-  hs <- mapM (liftM (("_. " <>) . stripTrailingNewlines) . blockListToTextile opts) headers
-  let cellsToRow cells = "|" <> T.intercalate "|" cells <> "|"
-  let header = if all null headers then "" else cellsToRow hs <> "\n"
-  let blocksToCell (align, bs) = do
-        contents <- stripTrailingNewlines <$> blockListToTextile opts bs
-        let alignMarker = case align of
-                               AlignLeft    -> "<. "
-                               AlignRight   -> ">. "
-                               AlignCenter  -> "=. "
-                               AlignDefault -> ""
-        return $ alignMarker <> contents
-  let rowToCells = mapM blocksToCell . zip aligns
-  bs <- mapM rowToCells rows'
-  let body = T.unlines $ map cellsToRow bs
-  return $ header <> body
-
-blockToTextile opts (Table capt aligns widths headers rows') = do
-  let alignStrings = map alignmentToText aligns
-  captionDoc <- if null capt
-                   then return ""
-                   else do
-                      c <- inlineListToTextile opts capt
-                      return $ "<caption>" <> c <> "</caption>\n"
-  let percent w = tshow (truncate (100*w) :: Integer) <> "%"
-  let coltags = if all (== 0.0) widths
-                   then ""
-                   else T.unlines $ map
-                         (\w -> "<col width=\"" <> percent w <> "\" />") widths
-  head' <- if all null headers
-              then return ""
-              else do
-                 hs <- tableRowToTextile opts alignStrings 0 headers
-                 return $ "<thead>\n" <> hs <> "\n</thead>\n"
-  body' <- zipWithM (tableRowToTextile opts alignStrings) [1..] rows'
-  return $ "<table>\n" <> captionDoc <> coltags <> head' <>
-            "<tbody>\n" <> T.unlines body' <> "</tbody>\n</table>\n"
+blockToTextile opts (Table _ blkCapt specs thead tbody tfoot)
+  = case toLegacyTable blkCapt specs thead tbody tfoot of
+      ([], aligns, widths, headers, rows') | all (==0) widths -> do
+        hs <- mapM (liftM (("_. " <>) . stripTrailingNewlines) . blockListToTextile opts) headers
+        let cellsToRow cells = "|" <> T.intercalate "|" cells <> "|"
+        let header = if all null headers then "" else cellsToRow hs <> "\n"
+        let blocksToCell (align, bs) = do
+              contents <- stripTrailingNewlines <$> blockListToTextile opts bs
+              let alignMarker = case align of
+                                     AlignLeft    -> "<. "
+                                     AlignRight   -> ">. "
+                                     AlignCenter  -> "=. "
+                                     AlignDefault -> ""
+              return $ alignMarker <> contents
+        let rowToCells = mapM blocksToCell . zip aligns
+        bs <- mapM rowToCells rows'
+        let body = T.unlines $ map cellsToRow bs
+        return $ header <> body
+      (capt, aligns, widths, headers, rows') -> do
+        let alignStrings = map alignmentToText aligns
+        captionDoc <- if null capt
+                         then return ""
+                         else do
+                            c <- inlineListToTextile opts capt
+                            return $ "<caption>" <> c <> "</caption>\n"
+        let percent w = tshow (truncate (100*w) :: Integer) <> "%"
+        let coltags = if all (== 0.0) widths
+                         then ""
+                         else T.unlines $ map
+                               (\w -> "<col width=\"" <> percent w <> "\" />") widths
+        head' <- if all null headers
+                    then return ""
+                    else do
+                       hs <- tableRowToTextile opts alignStrings 0 headers
+                       return $ "<thead>\n" <> hs <> "\n</thead>\n"
+        body' <- zipWithM (tableRowToTextile opts alignStrings) [1..] rows'
+        return $ "<table>\n" <> captionDoc <> coltags <> head' <>
+                  "<tbody>\n" <> T.unlines body' <> "</tbody>\n</table>\n"
 
 blockToTextile opts x@(BulletList items) = do
   oldUseTags <- gets stUseTags
@@ -387,6 +385,12 @@ inlineToTextile opts (Emph lst) = do
   return $ if '_' `elemText` contents
               then "<em>" <> contents <> "</em>"
               else "_" <> contents <> "_"
+
+inlineToTextile opts (Underline lst) = do
+  contents <- inlineListToTextile opts lst
+  return $ if '+' `elemText` contents
+              then "<u>" <> contents <> "</u>"
+              else "+" <> contents <> "+"
 
 inlineToTextile opts (Strong lst) = do
   contents <- inlineListToTextile opts lst

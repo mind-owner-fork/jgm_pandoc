@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org
-   Copyright   : © 2019 Albert Krewinkel
+   Copyright   : © 2019-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -12,13 +11,12 @@ Conversion of jira wiki formatted plain text to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.Jira ( readJira ) where
 
-import Prelude
 import Control.Monad.Except (throwError)
 import Data.Text (Text, append, pack, singleton, unpack)
 import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Jira.Parser (parse)
-import Text.Pandoc.Class (PandocMonad (..))
-import Text.Pandoc.Builder
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
+import Text.Pandoc.Builder hiding (cell)
 import Text.Pandoc.Error (PandocError (PandocParseError))
 import Text.Pandoc.Options (ReaderOptions)
 import Text.Pandoc.Shared (stringify)
@@ -121,10 +119,14 @@ jiraToPandocInlines :: Jira.Inline -> Inlines
 jiraToPandocInlines = \case
   Jira.Anchor t          -> spanWith (t, [], []) mempty
   Jira.AutoLink url      -> link (Jira.fromURL url) "" (str (Jira.fromURL url))
+  Jira.Citation ils      -> str "—" <> space <> emph (fromInlines ils)
+  Jira.ColorInline c ils -> spanWith ("", [], [("color", colorName c)]) $
+                                     fromInlines ils
   Jira.Emoji icon        -> str . iconUnicode $ icon
   Jira.Entity entity     -> str . fromEntity $ entity
-  Jira.Image _ url       -> image (Jira.fromURL url)  "" mempty
-  Jira.Link alias url    -> link (Jira.fromURL url) "" (fromInlines alias)
+  Jira.Image params url  -> let (title, attr) = imgParams params
+                            in imageWith attr (Jira.fromURL url) title mempty
+  Jira.Link lt alias url -> jiraLinkToPandoc lt alias url
   Jira.Linebreak         -> linebreak
   Jira.Monospaced inlns  -> code . stringify . toList . fromInlines $ inlns
   Jira.Space             -> space
@@ -139,11 +141,35 @@ jiraToPandocInlines = \case
 
     fromStyle = \case
       Jira.Emphasis    -> emph
-      Jira.Insert      -> spanWith ("", ["inserted"], [])
+      Jira.Insert      -> underline
       Jira.Strikeout   -> strikeout
       Jira.Strong      -> strong
       Jira.Subscript   -> subscript
       Jira.Superscript -> superscript
+
+    imgParams :: [Jira.Parameter] -> (Text, Attr)
+    imgParams = foldr addImgParam ("", ("", [], []))
+
+    addImgParam :: Jira.Parameter -> (Text, Attr) -> (Text, Attr)
+    addImgParam p (title, attr@(ident, classes, kvs)) =
+      case Jira.parameterKey p of
+        "title"     -> (Jira.parameterValue p, attr)
+        "thumbnail" -> (title, (ident, "thumbnail":classes, kvs))
+        _           -> let kv = (Jira.parameterKey p, Jira.parameterValue p)
+                       in (title, (ident, classes, kv:kvs))
+
+-- | Convert a Jira link to pandoc inlines.
+jiraLinkToPandoc :: Jira.LinkType -> [Jira.Inline] -> Jira.URL -> Inlines
+jiraLinkToPandoc linkType alias url =
+  let url' = (if linkType == Jira.User then ("~" <>) else id) $ Jira.fromURL url
+      alias' = case alias of
+                 [] -> str url'
+                 _  -> foldMap jiraToPandocInlines alias
+  in case linkType of
+    Jira.External   -> link url' "" alias'
+    Jira.Email      -> link ("mailto:" <> url') "" alias'
+    Jira.Attachment -> linkWith ("", ["attachment"], []) url' "" alias'
+    Jira.User       -> linkWith ("", ["user-account"], []) url' "" alias'
 
 -- | Get unicode representation of a Jira icon.
 iconUnicode :: Jira.Icon -> Text
@@ -156,18 +182,18 @@ iconUnicode = \case
   Jira.IconThumbsUp        -> "👍"
   Jira.IconThumbsDown      -> "👎"
   Jira.IconInfo            -> "ℹ"
-  Jira.IconCheckmark       -> "✓"
-  Jira.IconX               -> "🅇"
-  Jira.IconAttention       -> "⚠"
-  Jira.IconPlus            -> "⊞"
-  Jira.IconMinus           -> "⊟"
-  Jira.IconQuestionmark    -> "?"
+  Jira.IconCheckmark       -> "✔"
+  Jira.IconX               -> "❌"
+  Jira.IconAttention       -> "❗"
+  Jira.IconPlus            -> "➕"
+  Jira.IconMinus           -> "➖"
+  Jira.IconQuestionmark    -> "❓"
   Jira.IconOn              -> "💡"
-  Jira.IconOff             -> "💡"
-  Jira.IconStar            -> "★"
-  Jira.IconStarRed         -> "★"
-  Jira.IconStarGreen       -> "★"
-  Jira.IconStarBlue        -> "★"
-  Jira.IconStarYellow      -> "★"
+  Jira.IconOff             -> "🌙"
+  Jira.IconStar            -> "⭐"
+  Jira.IconStarRed         -> "⭐"
+  Jira.IconStarGreen       -> "⭐"
+  Jira.IconStarBlue        -> "⭐"
+  Jira.IconStarYellow      -> "⭐"
   Jira.IconFlag            -> "⚑"
   Jira.IconFlagOff         -> "⚐"

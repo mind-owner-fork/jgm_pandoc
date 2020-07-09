@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {- |
    Module : Text.Pandoc.Writers.Docx.StyleMap
-   Copyright   : © 2014-2019 Jesse Rosenthal <jrosenthal@jhu.edu>,
-                   2014-2019 John MacFarlane <jgm@berkeley.edu>,
+   Copyright   : © 2014-2020 Jesse Rosenthal <jrosenthal@jhu.edu>,
+                   2014-2020 John MacFarlane <jgm@berkeley.edu>,
                    2015-2019 Nikolay Yakimov <root@livid.pp.ru>
    License     : GNU GPL, version 2 or above
 
@@ -30,7 +29,6 @@ import qualified Data.Map as M
 import qualified Data.Text as T
 import Data.String
 import Data.Char (isSpace)
-import Prelude
 
 data StyleMaps = StyleMaps { smCharStyle :: CharStyleNameMap, smParaStyle :: ParaStyleNameMap }
 type ParaStyleNameMap = M.Map ParaStyleName ParStyle

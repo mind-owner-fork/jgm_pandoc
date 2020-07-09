@@ -556,26 +556,27 @@ M.RawBlock = M.Block:create_constructor(
 
 --- Creates a table element.
 -- @function Table
--- @tparam      {Inline,...} caption    table caption
--- @tparam      {AlignDefault|AlignLeft|AlignRight|AlignCenter,...} aligns alignments
--- @tparam      {int,...}    widths     column widths
--- @tparam      {Block,...}  headers    header row
--- @tparam      {{Block,...}} rows      table rows
--- @treturn     Block                   table element
+-- @tparam      Attr         attr       attributes
+-- @tparam      Caption      caption    table caption
+-- @tparam      {ColSpec,...} colspecs  column alignments and widths
+-- @tparam      TableHead    head       table head
+-- @tparam      {TableBody,..} bodies   table bodies
+-- @treturn     TableFoot    foot       table foot
 M.Table = M.Block:create_constructor(
   "Table",
-  function(caption, aligns, widths, headers, rows)
+  function(attr, caption, colspecs, head, bodies, foot)
     return {
       c = {
-        ensureInlineList(caption),
-        List:new(aligns),
-        List:new(widths),
-        List:new(headers),
-        List:new(rows)
+        attr,
+        caption,
+        List:new(colspecs),
+        head,
+        List:new(bodies),
+        foot
       }
     }
   end,
-  {"caption", "aligns", "widths", "headers", "rows"}
+  {"attr", "caption", "colspecs", "head", "bodies", "foot"}
 )
 
 
@@ -828,9 +829,19 @@ M.Subscript = M.Inline:create_constructor(
 --- Creates a Superscript inline element
 -- @function Superscript
 -- @tparam      {Inline,..} content     inline content
--- @treturn     Inline                  strong element
+-- @treturn     Inline                  superscript element
 M.Superscript = M.Inline:create_constructor(
   "Superscript",
+  function(content) return {c = ensureInlineList(content)} end,
+  "content"
+)
+
+--- Creates an Underline inline element
+-- @function Underline
+-- @tparam      {Inline,..} content     inline content
+-- @treturn     Inline                  underline element
+M.Underline = M.Inline:create_constructor(
+  "Underline",
   function(content) return {c = ensureInlineList(content)} end,
   "content"
 )

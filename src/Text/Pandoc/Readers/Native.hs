@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Native
-   Copyright   : Copyright (C) 2011-2019 John MacFarlane
+   Copyright   : Copyright (C) 2011-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,14 +13,13 @@ Conversion of a string representation of a pandoc type (@Pandoc@,
 -}
 module Text.Pandoc.Readers.Native ( readNative ) where
 
-import Prelude
 import Text.Pandoc.Definition
 import Text.Pandoc.Options (ReaderOptions)
 import Text.Pandoc.Shared (safeRead)
 
 import Control.Monad.Except (throwError)
 import Data.Text (Text)
-import Text.Pandoc.Class
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Error
 
 -- | Read native formatted text and return a Pandoc document.

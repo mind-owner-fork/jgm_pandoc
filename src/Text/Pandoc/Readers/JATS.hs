@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.JATS
-   Copyright   : Copyright (C) 2017-2019 Hamish Mackenzie
+   Copyright   : Copyright (C) 2017-2020 Hamish Mackenzie
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,7 +13,6 @@ Conversion of JATS XML to 'Pandoc' document.
 -}
 
 module Text.Pandoc.Readers.JATS ( readJATS ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isDigit, isSpace, toUpper)
 import Data.Default
@@ -26,9 +24,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Pandoc.Builder
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Options
-import Text.Pandoc.Shared (underlineSpan, crFilter, safeRead)
+import Text.Pandoc.Shared (crFilter, safeRead)
 import Text.TeXMath (readMathML, writeTeX)
 import Text.XML.Light
 import qualified Data.Set as S (fromList, member)
@@ -136,14 +134,14 @@ getGraphic :: PandocMonad m
            => Maybe (Inlines, Text) -> Element -> JATS m Inlines
 getGraphic mbfigdata e = do
   let atVal a = attrValue a e
-      (ident, title, caption) =
+      (ident, title, capt) =
          case mbfigdata of
-           Just (capt, i) -> (i, "fig:" <> atVal "title", capt)
+           Just (capt', i) -> (i, "fig:" <> atVal "title", capt')
            Nothing        -> (atVal "id", atVal "title",
                               text (atVal "alt-text"))
       attr = (ident, T.words $ atVal "role", [])
       imageUrl = atVal "href"
-  return $ imageWith attr imageUrl title caption
+  return $ imageWith attr imageUrl title capt
 
 getBlocks :: PandocMonad m => Element -> JATS m Blocks
 getBlocks e =  mconcat <$>
@@ -166,9 +164,9 @@ parseBlock (Elem e) =
                     "bullet" -> bulletList <$> listitems
                     listType -> do
                       let start = fromMaybe 1 $
-                                  (textContent <$> (filterElement (named "list-item") e
-                                               >>= filterElement (named "label")))
-                                   >>= safeRead
+                                  (filterElement (named "list-item") e
+                                               >>= filterElement (named "label"))
+                                   >>= safeRead . textContent
                       orderedListWith (start, parseListStyleType listType, DefaultDelim)
                         <$> listitems
         "def-list" -> definitionList <$> deflistitems
@@ -178,6 +176,7 @@ parseBlock (Elem e) =
         "article-meta" -> parseMetadata e
         "custom-meta" -> parseMetadata e
         "title" -> return mempty -- processed by header
+        "label" -> return mempty -- processed by header
         "table" -> parseTable
         "fig" -> parseFigure
         "fig-group" -> divWith (attrValue "id" e, ["fig-group"], [])
@@ -231,20 +230,20 @@ parseBlock (Elem e) =
            -- implicit figure.  otherwise, we emit a div with the contents
            case filterChildren (named "graphic") e of
                   [g] -> do
-                         caption <- case filterChild (named "caption") e of
-                                           Just t  -> mconcat .
-                                             intersperse linebreak <$>
-                                             mapM getInlines
-                                             (filterChildren (const True) t)
-                                           Nothing -> return mempty
-                         img <- getGraphic (Just (caption, attrValue "id" e)) g
+                         capt <- case filterChild (named "caption") e of
+                                        Just t  -> mconcat .
+                                          intersperse linebreak <$>
+                                          mapM getInlines
+                                          (filterChildren (const True) t)
+                                        Nothing -> return mempty
+                         img <- getGraphic (Just (capt, attrValue "id" e)) g
                          return $ para img
                   _   -> divWith (attrValue "id" e, ["fig"], []) <$> getBlocks e
          parseTable = do
                       let isCaption x = named "title" x || named "caption" x
-                      caption <- case filterChild isCaption e of
-                                       Just t  -> getInlines t
-                                       Nothing -> return mempty
+                      capt <- case filterChild isCaption e of
+                                    Just t  -> getInlines t
+                                    Nothing -> return mempty
                       let e' = fromMaybe e $ filterChild (named "tgroup") e
                       let isColspec x = named "colspec" x || named "col" x
                       let colspecs = case filterChild (named "colgroup") e' of
@@ -266,35 +265,41 @@ parseBlock (Elem e) =
                                                 Just "right"  -> AlignRight
                                                 Just "center" -> AlignCenter
                                                 _             -> AlignDefault
-                      let toWidth c = case findAttrText (unqual "colwidth") c of
-                                                Just w -> fromMaybe 0
-                                                   $ safeRead $ "0" <> T.filter (\x ->
-                                                     isDigit x || x == '.') w
-                                                Nothing -> 0 :: Double
+                      let toWidth c = do
+                            w <- findAttrText (unqual "colwidth") c
+                            n <- safeRead $ "0" <> T.filter (\x -> isDigit x || x == '.') w
+                            if n > 0 then Just n else Nothing
                       let numrows = foldl' max 0 $ map length bodyrows
                       let aligns = case colspecs of
                                      [] -> replicate numrows AlignDefault
                                      cs -> map toAlignment cs
                       let widths = case colspecs of
-                                     []  -> replicate numrows 0
-                                     cs  -> let ws = map toWidth cs
-                                                tot = sum ws
-                                            in  if all (> 0) ws
-                                                   then map (/ tot) ws
-                                                   else replicate numrows 0
-                      let headrows' = if null headrows
-                                         then replicate numrows mempty
-                                         else headrows
-                      return $ table caption (zip aligns widths)
-                                 headrows' bodyrows
+                                     [] -> replicate numrows ColWidthDefault
+                                     cs -> let ws = map toWidth cs
+                                           in case sequence ws of
+                                                Just ws' -> let tot = sum ws'
+                                                            in  ColWidth . (/ tot) <$> ws'
+                                                Nothing  -> replicate numrows ColWidthDefault
+                      let toRow = Row nullAttr . map simpleCell
+                          toHeaderRow l = if null l then [] else [toRow l]
+                      return $ table (simpleCaption $ plain capt)
+                                     (zip aligns widths)
+                                     (TableHead nullAttr $ toHeaderRow headrows)
+                                     [TableBody nullAttr 0 [] $ map toRow bodyrows]
+                                     (TableFoot nullAttr [])
          isEntry x  = named "entry" x || named "td" x || named "th" x
          parseRow = mapM (parseMixed plain . elContent) . filterChildren isEntry
          sect n = do isbook <- gets jatsBook
                      let n' = if isbook || n == 0 then n + 1 else n
+                     labelText <- case filterChild (named "label") e of
+                                    Just t -> (<> ("." <> space)) <$>
+                                              getInlines t
+                                    Nothing -> return mempty
                      headerText <- case filterChild (named "title") e `mplus`
                                         (filterChild (named "info") e >>=
                                             filterChild (named "title")) of
-                                      Just t  -> getInlines t
+                                      Just t  -> (labelText <>) <$>
+                                                  getInlines t
                                       Nothing -> return mempty
                      oldN <- gets jatsSectionLevel
                      modify $ \st -> st{ jatsSectionLevel = n }
@@ -312,6 +317,7 @@ parseMetadata e = do
   getTitle e
   getAuthors e
   getAffiliations e
+  getAbstract e
   return mempty
 
 getTitle :: PandocMonad m => Element -> JATS m ()
@@ -342,6 +348,14 @@ getAffiliations :: PandocMonad m => Element -> JATS m ()
 getAffiliations x = do
   affs <- mapM getInlines $ filterChildren (named "aff") x
   unless (null affs) $ addMeta "institute" affs
+
+getAbstract :: PandocMonad m => Element -> JATS m ()
+getAbstract e =
+  case filterElement (named "abstract") e of
+    Just s -> do
+      blks <- getBlocks s
+      addMeta "abstract" blks
+    Nothing -> pure ()
 
 getContrib :: PandocMonad m => Element -> JATS m Inlines
 getContrib x = do
@@ -451,7 +465,7 @@ parseInline (Elem e) =
         "strike" -> strikeout <$> innerInlines
         "sub" -> subscript <$> innerInlines
         "sup" -> superscript <$> innerInlines
-        "underline" -> underlineSpan <$> innerInlines
+        "underline" -> underline <$> innerInlines
         "break" -> return linebreak
         "sc" -> smallcaps <$> innerInlines
 

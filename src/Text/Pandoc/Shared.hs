@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude     #-}
 {-# LANGUAGE CPP                   #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -9,7 +8,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Shared
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -104,7 +103,6 @@ module Text.Pandoc.Shared (
                      pandocVersion
                     ) where
 
-import Prelude
 import Codec.Archive.Zip
 import qualified Control.Exception as E
 import Control.Monad (MonadPlus (..), msum, unless)
@@ -581,7 +579,8 @@ makeSections numbering mbBaseLevel bs =
     rest' <- go rest
     let kvs' = -- don't touch number if already present
                case lookup "number" kvs of
-                  Nothing | numbering ->
+                  Nothing | numbering
+                          , not ("unnumbered" `elem` classes) ->
                         ("number", T.intercalate "." (map tshow newnum)) : kvs
                   _ -> kvs
     let divattr = (ident, "section":classes, kvs')
@@ -669,7 +668,7 @@ stripEmptyParagraphs = walk go
 
 -- | Detect if table rows contain only cells consisting of a single
 -- paragraph that has no @LineBreak@.
-onlySimpleTableCells :: [[TableCell]] -> Bool
+onlySimpleTableCells :: [[[Block]]] -> Bool
 onlySimpleTableCells = all isSimpleCell . concat
   where
     isSimpleCell [Plain ils] = not (hasLineBreak ils)
@@ -752,11 +751,12 @@ eastAsianLineBreakFilter = bottomUp go
         go xs
           = xs
 
--- | Builder for underline.
+{-# DEPRECATED underlineSpan "Use Text.Pandoc.Builder.underline instead" #-}
+-- | Builder for underline (deprecated).
 -- This probably belongs in Builder.hs in pandoc-types.
 -- Will be replaced once Underline is an element.
 underlineSpan :: Inlines -> Inlines
-underlineSpan = B.spanWith ("", ["underline"], [])
+underlineSpan = B.underline
 
 -- | Set of HTML elements that are represented as Span with a class equal as
 -- the element tag itself.
@@ -838,7 +838,7 @@ filterIpynbOutput mode = walk go
 renderTags' :: [Tag T.Text] -> T.Text
 renderTags' = renderTagsOptions
                renderOptions{ optMinimize = matchTags ["hr", "br", "img",
-                                                       "meta", "link"]
+                                                       "meta", "link", "col"]
                             , optRawTag   = matchTags ["script", "style"] }
               where matchTags tags = flip elem tags . T.toLower
 
@@ -994,9 +994,14 @@ blockToInlines (DefinitionList pairslst) =
       mconcat (map blocksToInlines' blkslst)
 blockToInlines (Header _ _  ils) = B.fromList ils
 blockToInlines HorizontalRule = mempty
-blockToInlines (Table _ _ _ headers rows) =
+blockToInlines (Table _ _ _ (TableHead _ hbd) bodies (TableFoot _ fbd)) =
   mconcat $ intersperse B.linebreak $
-    map (mconcat . map blocksToInlines') (headers:rows)
+    map (mconcat . map blocksToInlines') (plainRowBody <$> hbd <> unTableBodies bodies <> fbd)
+  where
+    plainRowBody (Row _ body) = cellBody <$> body
+    cellBody (Cell _ _ _ _ body) = body
+    unTableBody (TableBody _ _ hd bd) = hd <> bd
+    unTableBodies = concatMap unTableBody
 blockToInlines (Div _ blks) = blocksToInlines' blks
 blockToInlines Null = mempty
 
@@ -1017,7 +1022,6 @@ defaultBlocksSeparator =
   -- This is used in the pandoc.utils.blocks_to_inlines function. Docs
   -- there should be updated if this is changed.
   B.space <> B.str "¶" <> B.space
-
 
 --
 -- Safe read

@@ -1,9 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternGuards #-}
 {- |
    Module      : Text.Pandoc.Writers.Powerpoint.Output
-   Copyright   : Copyright (C) 2017-2019 Jesse Rosenthal
+   Copyright   : Copyright (C) 2017-2020 Jesse Rosenthal
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -17,7 +16,6 @@ Text.Pandoc.Writers.Powerpoint.Presentation) to a zip archive.
 module Text.Pandoc.Writers.Powerpoint.Output ( presentationToArchive
                                              ) where
 
-import Prelude
 import Control.Monad.Except (throwError, catchError)
 import Control.Monad.Reader
 import Control.Monad.State
@@ -33,9 +31,9 @@ import System.FilePath.Posix (splitDirectories, splitExtension, takeExtension)
 import Text.XML.Light
 import Text.Pandoc.Definition
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Error (PandocError(..))
-import qualified Text.Pandoc.Class as P
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Text.Pandoc.Options
 import Text.Pandoc.MIME
 import qualified Data.ByteString.Lazy as BL
@@ -108,6 +106,7 @@ data WriterEnv = WriterEnv { envRefArchive :: Archive
                            -- are no notes for a slide, there will be
                            -- no entry in the map for it.
                            , envSpeakerNotesIdMap :: M.Map Int Int
+                           , envInSpeakerNotes :: Bool
                            }
                  deriving (Show)
 
@@ -125,6 +124,7 @@ instance Default WriterEnv where
                   , envContentType = NormalContent
                   , envSlideIdMap = mempty
                   , envSpeakerNotesIdMap = mempty
+                  , envInSpeakerNotes = False
                   }
 
 data ContentType = NormalContent
@@ -805,11 +805,14 @@ paraElemToElements (Run rpr s) = do
                           , mknode "a:t" [] $ T.unpack s
                           ]]
 paraElemToElements (MathElem mathType texStr) = do
-  res <- convertMath writeOMML mathType (unTeXString texStr)
-  case res of
-    Right r -> return [mknode "a14:m" [] $ addMathInfo r]
-    Left (Str s) -> paraElemToElements (Run def s)
-    Left _       -> throwError $ PandocShouldNeverHappenError "non-string math fallback"
+  isInSpkrNotes <- asks envInSpeakerNotes
+  if isInSpkrNotes
+    then paraElemToElements $ Run def $ unTeXString texStr
+    else do res <- convertMath writeOMML mathType (unTeXString texStr)
+            case res of
+              Right r -> return [mknode "a14:m" [] $ addMathInfo r]
+              Left (Str s) -> paraElemToElements (Run def s)
+              Left _       -> throwError $ PandocShouldNeverHappenError "non-string math fallback"
 paraElemToElements (RawOOXMLParaElem str) = return [ x | Elem x <- parseXML str ]
 
 
@@ -979,10 +982,10 @@ graphicToElement tableWidth (Tbl tblPr hdrCells rows) = do
   headers' <- mapM cellToOpenXML hdrCells
   rows' <- mapM (mapM cellToOpenXML) rows
   let borderProps = mknode "a:tcPr" [] ()
-  let emptyCell = [mknode "a:p" [] [mknode "a:pPr" [] ()]]
+  let emptyCell' = [mknode "a:p" [] [mknode "a:pPr" [] ()]]
   let mkcell border contents = mknode "a:tc" []
                             $ (if null contents
-                               then emptyCell
+                               then emptyCell'
                                else contents) <> [ borderProps | border ]
   let mkrow border cells = mknode "a:tr" [("h", "0")] $ map (mkcell border) cells
 
@@ -1233,7 +1236,8 @@ spaceParas = intersperse (Paragraph def [])
 
 speakerNotesBody :: PandocMonad m => [Paragraph] -> P m Element
 speakerNotesBody paras = do
-  elements <- mapM paragraphToElement $ spaceParas $ map removeParaLinks paras
+  elements <- local (\env -> env{envInSpeakerNotes = True}) $
+              mapM paragraphToElement $ spaceParas $ map removeParaLinks paras
   let txBody = mknode "p:txBody" [] $
                [mknode "a:bodyPr" [] (), mknode "a:lstStyle" [] ()] <> elements
   return $

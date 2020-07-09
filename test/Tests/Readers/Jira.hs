@@ -3,7 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Tests.Readers.Jira
-   Copyright   : © 2019 Albert Krewinel
+   Copyright   : © 2019-2020 Albert Krewinel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb@zeitkraut.de>
@@ -14,8 +14,8 @@ Tests for the RST reader.
 -}
 module Tests.Readers.Jira (tests) where
 
-import Prelude
-import Data.Text (Text)
+import Prelude hiding (unlines)
+import Data.Text (Text, unlines)
 import Test.Tasty (TestTree, testGroup)
 import Tests.Helpers (ToString, purely, test, (=?>))
 import Text.Pandoc (def)
@@ -57,6 +57,16 @@ tests =
     [ "simple block quote" =:
       "bq. _Don't_ quote me on this." =?>
       blockQuote (para $ emph "Don't" <> space <> "quote me on this.")
+
+    , "block quote between paragraphs" =:
+      unlines [ "Regular text."
+              , "bq.This is a blockquote"
+              , "More text."
+              ] =?>
+      mconcat [ para "Regular text."
+              , blockQuote (para "This is a blockquote")
+              , para "More text."
+              ]
     ]
 
   , testGroup "table"
@@ -77,6 +87,11 @@ tests =
       simpleTable []
                   [ [para "language", para "haskell", para "lua"]
                   , [para "type", para "static", para "dynamic"]]
+
+    , "table after paragraph" =:
+      "*tabletest*\n||Name|\n|Test|\n" =?>
+      para (strong "tabletest") <>
+      simpleTable [para "Name"] [[para "Test"]]
     ]
 
   , testGroup "inlines"
@@ -96,19 +111,74 @@ tests =
       "HCO ~3~^-^" =?>
       para ("HCO " <> subscript "3" <> superscript "-")
 
+    , "citation" =:
+      "Et tu, Brute? ??Caesar??" =?>
+      para ("Et tu, Brute? — " <> emph "Caesar")
+
+    , "color" =:
+      "This is {color:red}red{color}." =?>
+      para ("This is " <> spanWith ("", [], [("color", "red")]) "red" <> ".")
+
+    , "hexcolor" =:
+      "{color:#00875A}green{color}" =?>
+      para (spanWith ("", [], [("color", "#00875A")]) "green")
+
     , "linebreak" =:
       "first\nsecond" =?>
       para ("first" <> linebreak <> "second")
 
-    , "link" =:
-      "[Example|https://example.org]" =?>
-      para (link "https://example.org" "" "Example")
+    , testGroup "links"
+      [ "external" =:
+        "[Example|https://example.org]" =?>
+        para (link "https://example.org" "" "Example")
+
+      , "email" =:
+        "[mailto:me@example.org]" =?>
+        para (link "mailto:me@example.org" "" "me@example.org")
+
+      , "email with description" =:
+        "[email|mailto:me@example.org]" =?>
+        para (link "mailto:me@example.org" "" "email")
+
+      , "attachment" =:
+        "[^example.txt]" =?>
+        para (linkWith ("", ["attachment"], []) "example.txt" "" "example.txt")
+
+      , "attachment with description" =:
+        "[an example^example.txt]" =?>
+        para (linkWith ("", ["attachment"], []) "example.txt" "" "an example")
+
+      , "user" =:
+        "[~johndoe]" =?>
+        para (linkWith ("", ["user-account"], []) "~johndoe" "" "~johndoe")
+
+      , "user with description" =:
+        "[John Doe|~johndoe]" =?>
+        para (linkWith ("", ["user-account"], []) "~johndoe" "" "John Doe")
+      ]
 
     , "image" =:
       "!https://example.com/image.jpg!" =?>
       para (image "https://example.com/image.jpg" "" mempty)
 
+    , "thumbnail image" =:
+      "!image.jpg|thumbnail!" =?>
+      para (imageWith ("", ["thumbnail"], []) "image.jpg" "" mempty)
+
+    , "image with attributes" =:
+      "!image.gif|align=right, vspace=4, title=Hello!" =?>
+      let attr = ("", [], [("align", "right"), ("vspace", "4")])
+      in para $ imageWith attr "image.gif" "Hello" mempty
+
+    , "inserted text" =:
+      "+the new version+" =?>
+      para (underline "the new version")
+
     , "HTML entity" =:
       "me &amp; you" =?> para "me & you"
+
+    , "non-strikeout dashes" =:
+      "20.09-15 2-678" =?>
+      para "20.09-15 2-678"
     ]
   ]

@@ -1,11 +1,10 @@
 {-# LANGUAGE MultiWayIf          #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.HTML
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -39,7 +38,6 @@ import Network.HTTP (urlEncode)
 import Network.URI (URI (..), parseURIReference)
 import Numeric (showHex)
 import Text.DocLayout (render, literal)
-import Prelude
 import Text.Blaze.Internal (MarkupM (Empty), customLeaf, customParent)
 import Text.DocTemplates (FromContext (lookupContext), Context (..))
 import Text.Blaze.Html hiding (contents)
@@ -63,7 +61,8 @@ import System.FilePath (takeBaseName)
 import Text.Blaze.Html.Renderer.Text (renderHtml)
 import qualified Text.Blaze.XHtml1.Transitional as H
 import qualified Text.Blaze.XHtml1.Transitional.Attributes as A
-import Text.Pandoc.Class (PandocMonad, report, runPure)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
+import Text.Pandoc.Class.PandocPure (runPure)
 import Text.Pandoc.Error
 import Text.Pandoc.Logging
 import Text.Pandoc.MIME (mediaCategory)
@@ -282,12 +281,14 @@ pandocToHtml opts (Pandoc meta blocks) = do
           H.script $ text $ T.unlines [
               "document.addEventListener(\"DOMContentLoaded\", function () {"
             , " var mathElements = document.getElementsByClassName(\"math\");"
+            , " var macros = [];"
             , " for (var i = 0; i < mathElements.length; i++) {"
             , "  var texText = mathElements[i].firstChild;"
             , "  if (mathElements[i].tagName == \"SPAN\") {"
             , "   katex.render(texText.data, mathElements[i], {"
             , "    displayMode: mathElements[i].classList.contains('display'),"
             , "    throwOnError: false,"
+            , "    macros: macros,"
             , "    fleqn: " <> katexFlushLeft
             , "   });"
             , "}}});"
@@ -319,6 +320,10 @@ pandocToHtml opts (Pandoc meta blocks) = do
                                      defField "mathjaxurl"
                                        (T.takeWhile (/='?') u)
                         _         -> defField "mathjax" False) $
+                  (case writerHTMLMathMethod opts of
+                        PlainMath -> defField "displaymath-css" True
+                        WebTeX _  -> defField "displaymath-css" True
+                        _         -> id) $
                   defField "quotes" (stQuotes st) $
                   -- for backwards compatibility we populate toc
                   -- with the contents of the toc, rather than a
@@ -335,7 +340,7 @@ pandocToHtml opts (Pandoc meta blocks) = do
                   defField "slidy-url"
                     ("https://www.w3.org/Talks/Tools/Slidy2" :: Text) $
                   defField "slideous-url" ("slideous" :: Text) $
-                  defField "revealjs-url" ("reveal.js" :: Text) $
+                  defField "revealjs-url" ("https://unpkg.com/reveal.js@^4/" :: Text) $
                   defField "s5-url" ("s5/default" :: Text) $
                   defField "html5" (stHtml5 st)
                   metadata
@@ -611,7 +616,7 @@ adjustNumbers opts doc =
                                (writerNumberOffset opts ++ repeat 0)
                                (map (fromMaybe 0 . safeRead) $
                                 T.split (=='.') num))
-   fixnum (k,v) = (k,v)
+   fixnum x = x
    showSecNum = T.intercalate "." . map tshow
 
 -- | Convert Pandoc block element to HTML.
@@ -886,7 +891,8 @@ blockToHtml opts (DefinitionList lst) = do
                      return $ mconcat $ nl opts : term' : nl opts :
                                         intersperse (nl opts) defs') lst
   defList opts contents
-blockToHtml opts (Table capt aligns widths headers rows') = do
+blockToHtml opts (Table attr blkCapt specs thead tbody tfoot) = do
+  let (capt, aligns, widths, headers, rows') = toLegacyTable blkCapt specs thead tbody tfoot
   captionDoc <- if null capt
                    then return mempty
                    else do
@@ -913,15 +919,19 @@ blockToHtml opts (Table capt aligns widths headers rows') = do
                 return $ H.thead (nl opts >> contents) >> nl opts
   body' <- liftM (\x -> H.tbody (nl opts >> mconcat x)) $
                zipWithM (tableRowToHtml opts aligns) [1..] rows'
-  let tbl = H.table $
-              nl opts >> captionDoc >> coltags >> head' >> body' >> nl opts
-  let totalWidth = sum widths
+  let (ident,classes,kvs) = attr
   -- When widths of columns are < 100%, we need to set width for the whole
-  -- table, or some browsers give us skinny columns with lots of space between:
-  return $ if totalWidth == 0 || totalWidth == 1
-              then tbl
-              else tbl ! A.style (toValue $ "width:" <>
-                              show (round (totalWidth * 100) :: Int) <> "%;")
+  -- table, or some browsers give us skinny columns with lots of space
+  -- between:
+  let totalWidth = sum widths
+  let attr' = case lookup "style" kvs of
+                Nothing | totalWidth < 1 && totalWidth > 0
+                  -> (ident,classes, ("style","width:" <>
+                         T.pack (show (round (totalWidth * 100) :: Int))
+                         <> "%;"):kvs)
+                _ -> attr
+  addAttrs opts attr' $ H.table $
+    nl opts >> captionDoc >> coltags >> head' >> body' >> nl opts
 
 tableRowToHtml :: PandocMonad m
                => WriterOptions
@@ -1045,6 +1055,7 @@ inlineToHtml opts inline = do
                                          ]
 
     (Emph lst)       -> H.em <$> inlineListToHtml opts lst
+    (Underline lst)  -> H.u <$> inlineListToHtml opts lst
     (Strong lst)     -> H.strong <$> inlineListToHtml opts lst
     (Code attr@(ids,cs,kvs) str)
                      -> case hlCode of
@@ -1103,14 +1114,11 @@ inlineToHtml opts inline = do
               let s = case t of
                            InlineMath  -> "\\textstyle "
                            DisplayMath -> "\\displaystyle "
-              let m = imtag ! A.style "vertical-align:middle"
-                            ! A.src (toValue $ url <> T.pack (urlEncode (T.unpack $ s <> str)))
-                            ! A.alt (toValue str)
-                            ! A.title (toValue str)
-              let brtag = if html5 then H5.br else H.br
-              return $ case t of
-                        InlineMath  -> m
-                        DisplayMath -> brtag >> m >> brtag
+              return $ imtag ! A.style "vertical-align:middle"
+                             ! A.src (toValue $ url <> T.pack (urlEncode (T.unpack $ s <> str)))
+                             ! A.alt (toValue str)
+                             ! A.title (toValue str)
+                             ! A.class_ mathClass
            GladTeX ->
               return $
                 customParent (textTag "eq") !
@@ -1137,11 +1145,7 @@ inlineToHtml opts inline = do
                 DisplayMath -> str
            PlainMath -> do
               x <- lift (texMathToInlines t str) >>= inlineListToHtml opts
-              let m = H.span ! A.class_ mathClass $ x
-              let brtag = if html5 then H5.br else H.br
-              return  $ case t of
-                         InlineMath  -> m
-                         DisplayMath -> brtag >> m >> brtag
+              return $ H.span ! A.class_ mathClass $ x
     (RawInline f str) -> do
       ishtml <- isRawHtml f
       if ishtml
@@ -1310,4 +1314,3 @@ isRawHtml f = do
   html5 <- gets stHtml5
   return $ f == Format "html" ||
            ((html5 && f == Format "html5") || f == Format "html4")
-

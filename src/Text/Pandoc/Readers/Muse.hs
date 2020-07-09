@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Muse
-   Copyright   : Copyright (C) 2017-2019 Alexander Krotov
+   Copyright   : Copyright (C) 2017-2020 Alexander Krotov
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Alexander Krotov <ilabdsf@gmail.com>
@@ -19,7 +18,6 @@ TODO:
 -}
 module Text.Pandoc.Readers.Muse (readMuse) where
 
-import Prelude
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Except (throwError)
@@ -31,15 +29,15 @@ import qualified Data.Set as Set
 import Data.Maybe (fromMaybe, isNothing, maybeToList)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Builder (Blocks, Inlines)
+import Text.Pandoc.Builder (Blocks, Inlines, underline)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition
 import Text.Pandoc.Error (PandocError (PandocParsecError))
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (F)
-import Text.Pandoc.Shared (crFilter, trimr, underlineSpan, tshow)
+import Text.Pandoc.Shared (crFilter, trimr, tshow)
 
 -- | Read Muse from an input string and return a Pandoc document.
 readMuse :: PandocMonad m
@@ -647,9 +645,15 @@ data MuseTableElement = MuseHeaderRow [Blocks]
 
 museToPandocTable :: MuseTable -> Blocks
 museToPandocTable (MuseTable caption headers body footers) =
-  B.table caption attrs headRow (rows ++ body ++ footers)
-  where attrs = (AlignDefault, 0.0) <$ transpose (headers ++ body ++ footers)
+  B.table (B.simpleCaption $ B.plain caption)
+          attrs
+          (TableHead nullAttr $ toHeaderRow headRow)
+          [TableBody nullAttr 0 [] $ map toRow $ rows ++ body ++ footers]
+          (TableFoot nullAttr [])
+  where attrs = (AlignDefault, ColWidthDefault) <$ transpose (headers ++ body ++ footers)
         (headRow, rows) = fromMaybe ([], []) $ uncons headers
+        toRow = Row nullAttr . map B.simpleCell
+        toHeaderRow l = if null l then [] else [toRow l]
 
 museAppendElement :: MuseTableElement
                   -> MuseTable
@@ -695,8 +699,13 @@ museGridTable = try $ do
   indent <- getIndent
   indices <- museGridTableHeader
   fmap rowsToTable . sequence <$> many1 (museGridTableRow indent indices)
-  where rowsToTable rows = B.table mempty attrs [] rows
-                           where attrs = (AlignDefault, 0.0) <$ transpose rows
+  where rowsToTable rows = B.table B.emptyCaption
+                                   attrs
+                                   (TableHead nullAttr [])
+                                   [TableBody nullAttr 0 [] $ map toRow rows]
+                                   (TableFoot nullAttr [])
+                           where attrs = (AlignDefault, ColWidthDefault) <$ transpose rows
+                                 toRow = Row nullAttr . map B.simpleCell
 
 -- | Parse a table.
 table :: PandocMonad m => MuseParser m (F Blocks)
@@ -840,7 +849,7 @@ emph = fmap B.emph <$> emphasisBetween (char '*' <* notFollowedBy (char '*'))
 -- | Parse underline inline markup, indicated by @_@.
 -- Supported only in Emacs Muse mode, not Text::Amuse.
 underlined :: PandocMonad m => MuseParser m (F Inlines)
-underlined = fmap underlineSpan
+underlined = fmap underline
   <$  guardDisabled Ext_amuse -- Supported only by Emacs Muse
   <*> emphasisBetween (char '_')
 

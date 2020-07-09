@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.ODT
-   Copyright   : Copyright (C) 2008-2019 John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,7 +12,6 @@
 Conversion of 'Pandoc' documents to ODT.
 -}
 module Text.Pandoc.Writers.ODT ( writeODT ) where
-import Prelude
 import Codec.Archive.Zip
 import Control.Monad.Except (catchError)
 import Control.Monad.State.Strict
@@ -26,8 +24,8 @@ import qualified Data.Text.Lazy as TL
 import Data.Time
 import System.FilePath (takeDirectory, takeExtension, (<.>))
 import Text.Pandoc.BCP47 (Lang (..), getLang, renderLang)
-import Text.Pandoc.Class (PandocMonad, report, toLang)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report, toLang)
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging

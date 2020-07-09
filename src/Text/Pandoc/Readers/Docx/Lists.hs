@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Docx.Lists
-   Copyright   : Copyright (C) 2014-2019 Jesse Rosenthal
+   Copyright   : Copyright (C) 2014-2020 Jesse Rosenthal
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Jesse Rosenthal <jrosenthal@jhu.edu>
@@ -18,7 +17,6 @@ module Text.Pandoc.Readers.Docx.Lists ( blocksToBullets
                                       , listParagraphStyles
                                       ) where
 
-import Prelude
 import Data.List
 import Data.Maybe
 import Data.String (fromString)

@@ -1,12 +1,11 @@
 {-# LANGUAGE CPP                 #-}
 {-# LANGUAGE FlexibleContexts    #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
 {- |
    Module      : Text.Pandoc.App
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -19,7 +18,6 @@ module Text.Pandoc.App.OutputSettings
   ( OutputSettings (..)
   , optToOutputSettings
   ) where
-import Prelude
 import qualified Data.Map as M
 import qualified Data.Text as T
 import Text.DocTemplates (toVal, Context(..), Val(..))

@@ -1,11 +1,10 @@
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Readers.DokuWiki
-   Copyright   : Copyright (C) 2018-2019 Alexander Krotov
+   Copyright   : Copyright (C) 2018-2020 Alexander Krotov
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Alexander Krotov <ilabdsf@gmail.com>
@@ -16,7 +15,6 @@ Conversion of DokuWiki text to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.DokuWiki (readDokuWiki) where
 
-import Prelude
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Data.Char (isAlphaNum, isDigit)
@@ -26,12 +24,12 @@ import Data.Maybe (fromMaybe, catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition
 import Text.Pandoc.Error (PandocError (PandocParsecError))
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (enclosed, nested)
-import Text.Pandoc.Shared (crFilter, trim, underlineSpan, stringify, tshow)
+import Text.Pandoc.Shared (crFilter, trim, stringify, tshow)
 
 -- | Read DokuWiki from an input string and return a Pandoc document.
 readDokuWiki :: PandocMonad m
@@ -164,7 +162,7 @@ italic :: PandocMonad m => DWParser m B.Inlines
 italic = try $ B.emph <$> enclosed (string "//") nestedInlines
 
 underlined :: PandocMonad m => DWParser m B.Inlines
-underlined = try $ underlineSpan <$> enclosed (string "__") nestedInlines
+underlined = try $ B.underline <$> enclosed (string "__") nestedInlines
 
 nowiki :: PandocMonad m => DWParser m B.Inlines
 nowiki = try $ B.text <$ string "<nowiki>" <*> manyTillChar anyChar (try $ string "</nowiki>")
@@ -472,8 +470,14 @@ table = do
   let (headerRow, body) = if firstSeparator == '^'
                             then (head rows, tail rows)
                             else ([], rows)
-  let attrs = (AlignDefault, 0.0) <$ transpose rows
-  pure $ B.table mempty attrs headerRow body
+  let attrs = (AlignDefault, ColWidthDefault) <$ transpose rows
+  let toRow = Row nullAttr . map B.simpleCell
+      toHeaderRow l = if null l then [] else [toRow l]
+  pure $ B.table B.emptyCaption
+                 attrs
+                 (TableHead nullAttr $ toHeaderRow headerRow)
+                 [TableBody nullAttr 0 [] $ map toRow body]
+                 (TableFoot nullAttr [])
 
 tableRows :: PandocMonad m => DWParser m [[B.Blocks]]
 tableRows = many1 tableRow

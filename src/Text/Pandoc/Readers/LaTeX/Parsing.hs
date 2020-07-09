@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {- |
    Module      : Text.Pandoc.Readers.LaTeX.Parsing
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -69,7 +68,6 @@ module Text.Pandoc.Readers.LaTeX.Parsing
   , withRaw
   ) where
 
-import Prelude
 import Control.Applicative (many, (<|>))
 import Control.Monad
 import Control.Monad.Except (throwError)
@@ -82,7 +80,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.Builder
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Error (PandocError (PandocMacroLoop))
 import Text.Pandoc.Logging
 import Text.Pandoc.Options

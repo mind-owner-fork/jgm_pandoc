@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Shared
-   Copyright   : Copyright (C) 2014-2019 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -17,7 +16,6 @@ module Text.Pandoc.Readers.Org.Shared
   , exportsCode
   ) where
 
-import Prelude
 import Data.Char (isAlphaNum)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,7 +26,8 @@ import Text.Pandoc.Shared (elemText)
 isImageFilename :: Text -> Bool
 isImageFilename fp = hasImageExtension && (isValid (T.unpack fp) || isKnownProtocolUri)
  where
-   hasImageExtension = takeExtension (T.unpack fp) `elem` imageExtensions
+   hasImageExtension = takeExtension (T.unpack $ T.toLower fp)
+                       `elem` imageExtensions
    isKnownProtocolUri = any (\x -> (x <> "://") `T.isPrefixOf` fp) protocols
 
    imageExtensions = [ ".jpeg", ".jpg", ".png", ".gif", ".svg" ]

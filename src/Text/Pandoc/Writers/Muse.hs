@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Muse
-   Copyright   : Copyright (C) 2017-2019 Alexander Krotov
+   Copyright   : Copyright (C) 2017-2020 Alexander Krotov
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Alexander Krotov <ilabdsf@gmail.com>
@@ -26,7 +25,6 @@ However, @\<literal style="html">@ tag is used for HTML raw blocks
 even though it is supported only in Emacs Muse.
 -}
 module Text.Pandoc.Writers.Muse (writeMuse) where
-import Prelude
 import Control.Monad.Except (throwError)
 import Control.Monad.Reader
 import Control.Monad.State.Strict
@@ -37,7 +35,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Text (Text)
 import System.FilePath (takeExtension)
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
 import Text.Pandoc.ImageSize
@@ -152,8 +150,8 @@ flatBlockListToMuse [] = return mempty
 
 simpleTable :: PandocMonad m
             => [Inline]
-            -> [TableCell]
-            -> [[TableCell]]
+            -> [[Block]]
+            -> [[[Block]]]
             -> Muse m (Doc Text)
 simpleTable caption headers rows = do
   topLevel <- asks envTopLevel
@@ -261,17 +259,18 @@ blockToMuse (Header level (ident,_,_) inlines) = do
   return $ blankline <> attr' $$ nowrap (header' <> contents) <> blankline
 -- https://www.gnu.org/software/emacs-muse/manual/muse.html#Horizontal-Rules-and-Anchors
 blockToMuse HorizontalRule = return $ blankline $$ "----" $$ blankline
-blockToMuse (Table caption aligns widths headers rows) =
+blockToMuse (Table _ blkCapt specs thead tbody tfoot) =
   if isSimple && numcols > 1
     then simpleTable caption headers rows
     else do
       opts <- asks envOptions
       gridTable opts blocksToDoc True (map (const AlignDefault) aligns) widths headers rows
   where
+    (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
     blocksToDoc opts blocks =
       local (\env -> env { envOptions = opts }) $ blockListToMuse blocks
     numcols = maximum (length aligns : length widths : map length (headers:rows))
-    isSimple = onlySimpleTableCells (headers:rows) && all (== 0) widths
+    isSimple = onlySimpleTableCells (headers : rows) && all (== 0) widths
 blockToMuse (Div _ bs) = flatBlockListToMuse bs
 blockToMuse Null = return empty
 
@@ -595,6 +594,13 @@ inlineToMuse (Strong [Emph lst]) = do
     else if null lst' || startsWithSpace lst' || endsWithSpace lst'
            then emphasis "**<em>" "</em>**" lst'
            else emphasis "***" "***" lst'
+-- | Underline is only supported in Emacs Muse mode.
+inlineToMuse (Underline lst) = do
+  opts <- asks envOptions
+  contents <- inlineListToMuse lst
+  if isEnabled Ext_amuse opts
+     then return $ "_" <> contents <> "_"
+     else inlineToMuse (Emph lst)
 inlineToMuse (Strong lst) = do
   useTags <- gets stUseTags
   let lst' = normalizeInlineList lst

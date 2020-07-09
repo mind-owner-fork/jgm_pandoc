@@ -5,7 +5,7 @@ on:
     branches:
     - '*'
     - '!rc/*'
-    ignore-paths:
+    paths-ignore:
     - 'doc/**'
     - 'MANUAL.txt'
     - '*.md'
@@ -20,7 +20,7 @@ on:
     - 'windows/**'
     - 'man/**'
   pull_request:
-    ignore-paths:
+    paths-ignore:
     - 'doc/**'
     - 'MANUAL.txt'
     - '*.md'
@@ -38,7 +38,7 @@ on:
 jobs:
   linux:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     strategy:
       fail-fast: true
       matrix:
@@ -50,19 +50,52 @@ jobs:
           - ghc: '8.4.4'
             cabal: '2.4'
           - ghc: '8.6.5'
-            cabal: '2.4'
-          - ghc: '8.8.1'
-            cabal: '3.0'
+            cabal: '3.2'
+          - ghc: '8.8.3'
+            cabal: '3.2'
+          - ghc: '8.10.1'
+            cabal: '3.2'
     steps:
     - uses: actions/checkout@v1
+
+    # need to install older cabal/ghc versions from ppa repository
+
+    - name: Install recent cabal/ghc
+      run: |
+         if [[ ! -d /opt/ghc/${{ matrix.versions.ghc }} ]]
+         then
+           sudo add-apt-repository ppa:hvr/ghc
+           sudo apt-get update
+           sudo apt-get install ghc-${{ matrix.versions.ghc }} cabal-install-${{ matrix.versions.cabal }}
+         fi
+         # Use a GitHub workflow command to add folders to PATH.
+         echo "::add-path::/opt/ghc/${{ matrix.versions.ghc }}/bin"
+         echo "::add-path::/opt/cabal/${{ matrix.versions.cabal }}/bin"
+
+    # declare/restore cached things
+    # caching doesn't work for scheduled runs yet
+    # https://github.com/actions/cache/issues/63
+
+    - name: Cache cabal global package db
+      id:   cabal-global
+      uses: actions/cache@v1
+      with:
+        path: ~/.cabal
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ hashFiles('cabal.project') }}
+
+    - name: Cache cabal work
+      id:   cabal-local
+      uses: actions/cache@v1
+      with:
+        path: dist-newstyle
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local
+
     - name: Install dependencies
       run: |
-          export PATH=/opt/cabal/${{ matrix.versions.cabal }}/bin:/opt/ghc/${{ matrix.versions.ghc }}/bin:$PATH
           cabal v2-update
           cabal v2-build --dependencies-only --enable-tests --disable-optimization
     - name: Build and test
       run: |
-          export PATH=/opt/cabal/${{ matrix.versions.cabal }}/bin:/opt/ghc/${{ matrix.versions.ghc }}/bin:$PATH
           cabal v2-build --enable-tests --disable-optimization 2>&1 | tee build.log
           # fail if warnings in local build
           ! grep -q ": *[Ww]arning:" build.log || exit 1
@@ -70,7 +103,7 @@ jobs:
 
   windows:
 
-    runs-on: windows-latest
+    runs-on: windows-2019
 
     steps:
     - uses: actions/checkout@v1
@@ -78,6 +111,26 @@ jobs:
       shell: cmd
       run: |
           choco install haskell-stack
+
+    # declare/restore cached things
+    # caching doesn't work for scheduled runs yet
+    # https://github.com/actions/cache/issues/63
+
+    - name: Cache stack global package db
+      id:   stack-global-package-db
+      uses: actions/cache@v1
+      with:
+        path: C:\Users\runneradmin\AppData\Roaming\stack\
+        key:          ${{ runner.os }}-appdata-roaming-stack-${{ hashFiles('stack.yaml') }}
+
+    # stack's local package dbs for the project and each package
+    # - name: Cache .stack-work
+    #   uses: actions/cache@v1
+    #   with:
+    #     path: .stack-work
+    #     key:          ${{ runner.os }}-stack-work-${{ hashFiles('stack.yaml') }}
+    #     restore-keys: ${{ runner.os }}-stack-work
+
     - name: Install dependencies
       run: |
           stack update
@@ -89,7 +142,7 @@ jobs:
 
   macos:
 
-    runs-on: macOS-latest
+    runs-on: macOS-10.15
 
     steps:
     - uses: actions/checkout@v1
@@ -97,6 +150,24 @@ jobs:
       run: |
           curl -L https://get.haskellstack.org/stable/osx-x86_64.tar.gz -o stack.tar.gz
           tar xzvf stack.tar.gz --strip-components=1 'stack*/stack'
+
+    # declare/restore cached things
+    # caching doesn't work for scheduled runs yet https://github.com/actions/cache/issues/63
+
+    - name: Cache stack global package db
+      id:   stack-global
+      uses: actions/cache@v1
+      with:
+        path: ~/.stack
+        key:          ${{ runner.os }}-stack-global-${{ hashFiles('stack.yaml') }}
+
+    # stack's local package db
+    # - name: Cache .stack-work
+    #   uses: actions/cache@v1
+    #   with:
+    #     path: .stack-work
+    #     key: ${{ runner.os }}-stack-work
+
     - name: Install dependencies
       run: |
           ./stack update

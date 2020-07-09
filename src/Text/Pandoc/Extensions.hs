@@ -1,5 +1,4 @@
 {-# LANGUAGE CPP                        #-}
-{-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -7,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {- |
    Module      : Text.Pandoc.Extensions
-   Copyright   : Copyright (C) 2012-2019 John MacFarlane
+   Copyright   : Copyright (C) 2012-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -33,7 +32,6 @@ module Text.Pandoc.Extensions ( Extension(..)
                               , githubMarkdownExtensions
                               , multimarkdownExtensions )
 where
-import Prelude
 import Data.Bits (clearBit, setBit, testBit, (.|.))
 import Data.Data (Data)
 import qualified Data.Text as T
@@ -437,6 +435,7 @@ getAllExtensions f = universalExtensions <> getAll f
     extensionsFromList
     [ Ext_raw_html
     , Ext_raw_tex            -- only supported in writer (for math)
+    , Ext_implicit_figures
     , Ext_hard_line_breaks
     , Ext_smart
     ]

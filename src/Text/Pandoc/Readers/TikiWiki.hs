@@ -1,7 +1,5 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RelaxedPolyRec    #-}
 
 {- |
    Module      : Text.Pandoc.Readers.TikiWiki
@@ -18,7 +16,6 @@ Conversion of TikiWiki text to 'Pandoc' document.
 module Text.Pandoc.Readers.TikiWiki ( readTikiWiki
                                     ) where
 
-import Prelude
 import Control.Monad
 import Control.Monad.Except (throwError)
 import qualified Data.Foldable as F
@@ -27,7 +24,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (CommonState (..), PandocMonad (..))
+import Text.Pandoc.Class.CommonState (CommonState (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging (Verbosity (..))
 import Text.Pandoc.Options

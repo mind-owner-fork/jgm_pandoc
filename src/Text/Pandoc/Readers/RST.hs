@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Readers.RST
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,7 +14,6 @@
 Conversion from reStructuredText to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.RST ( readRST ) where
-import Prelude
 import Control.Arrow (second)
 import Control.Monad (forM_, guard, liftM, mplus, mzero, when)
 import Control.Monad.Except (throwError)
@@ -23,13 +21,14 @@ import Control.Monad.Identity (Identity (..))
 import Data.Char (isHexDigit, isSpace, toUpper, isAlphaNum)
 import Data.List (deleteFirstsBy, elemIndex, nub, sort, transpose)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, maybeToList, isJust)
 import Data.Sequence (ViewR (..), viewr)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.Builder (Blocks, Inlines, fromList, setMeta, trimInlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad, fetchItem, readFileFromDirs)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, fetchItem,
+                                      readFileFromDirs, getCurrentTime)
 import Text.Pandoc.CSV (CSVOptions (..), defaultCSVOptions, parseCSV)
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
@@ -40,6 +39,7 @@ import Text.Pandoc.Parsing
 import Text.Pandoc.Shared
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Printf (printf)
+import Data.Time.Format
 
 -- TODO:
 -- [ ] .. parsed-literal
@@ -390,11 +390,13 @@ quotedBlock = try $ do
 codeBlockStart :: Monad m => ParserT Text st m Char
 codeBlockStart = string "::" >> blankline >> blankline
 
-codeBlock :: (HasReaderOptions st, Monad m) => ParserT Text st m Blocks
+codeBlock :: Monad m => ParserT Text ParserState m Blocks
 codeBlock = try $ codeBlockStart >> codeBlockBody
 
-codeBlockBody :: (HasReaderOptions st, Monad m) => ParserT Text st m Blocks
-codeBlockBody = try $ B.codeBlock . stripTrailingNewlines <$>
+codeBlockBody :: Monad m => ParserT Text ParserState m Blocks
+codeBlockBody = do
+  lang <- stateRstHighlight <$> getState
+  try $ B.codeBlockWith ("", maybeToList lang, []) . stripTrailingNewlines <$>
                 (indentedBlock <|> quotedBlock)
 
 lhsCodeBlock :: Monad m => RSTParser m Blocks
@@ -485,10 +487,9 @@ includeDirective top fields body = do
   let contents' = T.unlines contentLines'' <> "\n"
   case lookup "code" fields of
        Just lang -> do
-         let numberLines = lookup "number-lines" fields
          let classes =  maybe [] T.words (lookup "class" fields)
          let ident = maybe "" trimr $ lookup "name" fields
-         codeblock ident classes numberLines (trimr lang) contents' False
+         codeblock ident classes fields (trimr lang) contents' False
        Nothing   -> case lookup "literal" fields of
                          Just _  -> return $ B.rawBlock "rst" contents'
                          Nothing -> do
@@ -682,6 +683,13 @@ directive' = do
                           parseFromString' parseBlocks body'
         "replace" -> B.para <$>  -- consumed by substKey
                    parseInlineFromText (trim top)
+        "date" -> B.para <$> do  -- consumed by substKey
+                     t <- getCurrentTime
+                     let format = case T.unpack (T.strip top) of
+                                    [] -> "%Y-%m-%d"
+                                    x  -> x
+                     return $ B.text $
+                              T.pack $ formatTime defaultTimeLocale format t
         "unicode" -> B.para <$>  -- consumed by substKey
                    parseInlineFromText (trim $ unicodeTransform top)
         "compound" -> parseFromString' parseBlocks body'
@@ -716,9 +724,14 @@ directive' = do
                                   case trim top of
                                      ""   -> stateRstDefaultRole def
                                      role -> role })
+        "highlight" -> mempty <$ updateState (\s ->
+                              s { stateRstHighlight =
+                                  case trim top of
+                                     ""   -> stateRstHighlight def
+                                     lang -> Just lang })
         x | x == "code" || x == "code-block" || x == "sourcecode" ->
-          codeblock name classes
-                    (lookup "number-lines" fields) (trim top) body True
+          codeblock name classes (map (second trimr) fields)
+             (trim top) body True
         "aafig" -> do
           let attribs = (name, ["aafig"], map (second trimr) fields)
           return $ B.codeBlockWith attribs $ stripTrailingNewlines body
@@ -756,24 +769,34 @@ tableDirective :: PandocMonad m
 tableDirective top fields body = do
   bs <- parseFromString' parseBlocks body
   case B.toList bs of
-       [Table _ aligns' widths' header' rows'] -> do
+       [Table attr _ tspecs' thead@(TableHead _ thrs) tbody tfoot] -> do
+         let (aligns', widths') = unzip tspecs'
          title <- parseFromString' (trimInlines . mconcat <$> many inline) top
          columns <- getOption readerColumns
-         let numOfCols = length header'
+         let numOfCols = case thrs of
+               [] -> 0
+               (r:_) -> rowLength r
          let normWidths ws =
-                map (/ max 1.0 (fromIntegral (columns - numOfCols))) ws
+                strictPos . (/ max 1.0 (fromIntegral (columns - numOfCols))) <$> ws
          let widths = case trim <$> lookup "widths" fields of
-                           Just "auto" -> replicate numOfCols 0.0
+                           Just "auto" -> replicate numOfCols ColWidthDefault
                            Just "grid" -> widths'
                            Just specs -> normWidths
                                $ map (fromMaybe (0 :: Double) . safeRead)
                                $ splitTextBy (`elem` (" ," :: String)) specs
                            Nothing -> widths'
          -- align is not applicable since we can't represent whole table align
-         return $ B.singleton $ Table (B.toList title)
-                                  aligns' widths header' rows'
+         let tspecs = zip aligns' widths
+         return $ B.singleton $ Table attr (B.caption Nothing (B.plain title))
+                                  tspecs thead tbody tfoot
        _ -> return mempty
-
+  where
+    -- only valid on the very first row of a table section
+    rowLength (Row _ rb) = sum $ cellLength <$> rb
+    cellLength (Cell _ _ _ (ColSpan w) _) = max 1 w
+    strictPos w
+      | w > 0     = ColWidth w
+      | otherwise = ColWidthDefault
 
 -- TODO: :stub-columns:.
 -- Only the first row becomes the header even if header-rows: > 1,
@@ -794,19 +817,25 @@ listTableDirective top fields body = do
                    else ([], rows, length x)
         _ -> ([],[],0)
       widths = case trim <$> lookup "widths" fields of
-        Just "auto" -> replicate numOfCols 0
+        Just "auto" -> replicate numOfCols ColWidthDefault
         Just specs -> normWidths $ map (fromMaybe (0 :: Double) . safeRead) $
                            splitTextBy (`elem` (" ," :: String)) specs
-        _ -> replicate numOfCols 0
-  return $ B.table title
+        _ -> replicate numOfCols ColWidthDefault
+      toRow = Row nullAttr . map B.simpleCell
+      toHeaderRow l = if null l then [] else [toRow l]
+  return $ B.table (B.simpleCaption $ B.plain title)
              (zip (replicate numOfCols AlignDefault) widths)
-             headerRow
-             bodyRows
+             (TableHead nullAttr $ toHeaderRow headerRow)
+             [TableBody nullAttr 0 [] $ map toRow bodyRows]
+             (TableFoot nullAttr [])
     where takeRows [BulletList rows] = map takeCells rows
           takeRows _                 = []
           takeCells [BulletList cells] = map B.fromList cells
           takeCells _                  = []
-          normWidths ws = map (/ max 1 (sum ws)) ws
+          normWidths ws = strictPos . (/ max 1 (sum ws)) <$> ws
+          strictPos w
+            | w > 0     = ColWidth w
+            | otherwise = ColWidthDefault
 
 csvTableDirective :: PandocMonad m
                    => Text -> [(Text, Text)] -> Text
@@ -859,18 +888,24 @@ csvTableDirective top fields rawcsv = do
                           else ([], rows, length x)
                    _ -> ([],[],0)
          title <- parseFromString' (trimInlines . mconcat <$> many inline) top
-         let normWidths ws = map (/ max 1 (sum ws)) ws
+         let strictPos w
+               | w > 0     = ColWidth w
+               | otherwise = ColWidthDefault
+         let normWidths ws = strictPos . (/ max 1 (sum ws)) <$> ws
          let widths =
                case trim <$> lookup "widths" fields of
-                 Just "auto" -> replicate numOfCols 0
+                 Just "auto" -> replicate numOfCols ColWidthDefault
                  Just specs -> normWidths
                                $ map (fromMaybe (0 :: Double) . safeRead)
                                $ splitTextBy (`elem` (" ," :: String)) specs
-                 _ -> replicate numOfCols 0
-         return $ B.table title
-                  (zip (replicate numOfCols AlignDefault) widths)
-                  headerRow
-                  bodyRows
+                 _ -> replicate numOfCols ColWidthDefault
+         let toRow = Row nullAttr . map B.simpleCell
+             toHeaderRow l = if null l then [] else [toRow l]
+         return $ B.table (B.simpleCaption $ B.plain title)
+                          (zip (replicate numOfCols AlignDefault) widths)
+                          (TableHead nullAttr $ toHeaderRow headerRow)
+                          [TableBody nullAttr 0 [] $ map toRow bodyRows]
+                          (TableFoot nullAttr [])
 
 -- TODO:
 --  - Only supports :format: fields with a single format for :raw: roles,
@@ -971,21 +1006,22 @@ toChunks = dropWhile T.null
                           then "\\begin{aligned}\n" <> s <> "\n\\end{aligned}"
                           else s
 
-codeblock :: Text -> [Text] -> Maybe Text -> Text -> Text -> Bool
+codeblock :: Text -> [Text] -> [(Text, Text)] -> Text -> Text -> Bool
           -> RSTParser m Blocks
-codeblock ident classes numberLines lang body rmTrailingNewlines =
+codeblock ident classes fields lang body rmTrailingNewlines = do
   return $ B.codeBlockWith attribs $ stripTrailingNewlines' body
     where stripTrailingNewlines' = if rmTrailingNewlines
                                      then stripTrailingNewlines
                                      else id
           attribs = (ident, classes', kvs)
           classes' = lang
-                    : maybe [] (const ["numberLines"]) numberLines
+                    : ["numberLines" | isJust (lookup "number-lines" fields)]
                     ++ classes
-          kvs = maybe [] (\n -> case trimr n of
-                                   "" -> []
-                                   xs -> [("startFrom", xs)])
-                            numberLines
+          kvs = [(k,v) | (k,v) <- fields, k /= "number-lines", k /= "class",
+                                          k /= "id", k /= "name"]
+                ++ case lookup "number-lines" fields of
+                     Just v | not (T.null v) -> [("startFrom", v)]
+                     _ -> []
 
 ---
 --- note block
@@ -1279,13 +1315,14 @@ simpleTable headless = do
            sep simpleTableFooter
   -- Simple tables get 0s for relative column widths (i.e., use default)
   case B.toList tbl of
-       [Table c a _w h l]  -> return $ B.singleton $
-                                 Table c a (replicate (length a) 0) h l
+       [Table attr cap spec th tb tf] -> return $ B.singleton $
+                                         Table attr cap (rewidth spec) th tb tf
        _ ->
          throwError $ PandocShouldNeverHappenError
             "tableWith returned something unexpected"
  where
   sep = return () -- optional (simpleTableSep '-')
+  rewidth = fmap $ fmap $ const ColWidthDefault
 
 gridTable :: PandocMonad m
           => Bool -- ^ Headerless table

@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Ms
-   Copyright   : Copyright (C) 2007-2019 John MacFarlane
+   Copyright   : Copyright (C) 2007-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -21,7 +20,6 @@ TODO:
 -}
 
 module Text.Pandoc.Writers.Ms ( writeMs ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isLower, isUpper, ord)
 import Data.List (intercalate, intersperse)
@@ -33,7 +31,7 @@ import Network.URI (escapeURIString, isAllowedInURI)
 import Skylighting
 import System.FilePath (takeExtension)
 import Text.Pandoc.Asciify (toAsciiChar)
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Highlighting
 import Text.Pandoc.ImageSize
@@ -216,9 +214,10 @@ blockToMs opts (BlockQuote blocks) = do
   setFirstPara
   contents <- blockListToMs opts blocks
   setFirstPara
-  return $ literal ".RS" $$ contents $$ literal ".RE"
-blockToMs opts (Table caption alignments widths headers rows) =
-  let aligncode AlignLeft    = "l"
+  return $ literal ".QS" $$ contents $$ literal ".QE"
+blockToMs opts (Table _ blkCapt specs thead tbody tfoot) =
+  let (caption, alignments, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+      aligncode AlignLeft    = "l"
       aligncode AlignRight   = "r"
       aligncode AlignCenter  = "c"
       aligncode AlignDefault = "l"
@@ -321,8 +320,9 @@ definitionListItemToMs opts (label, defs) = do
                         rest' <- liftM vcat $
                                   mapM (\item -> blockToMs opts item) rest
                         first' <- blockToMs opts first
-                        return $ first' $$ literal ".RS" $$ rest' $$ literal ".RE"
-  return $ nowrap (literal ".IP " <> doubleQuotes labelText) $$ contents
+                        return $ first' $$ literal ".RS 3" $$ rest' $$ literal ".RE"
+  return $ nowrap (literal ".IP " <> doubleQuotes labelText <> " 3") $$
+           contents
 
 -- | Convert list of Pandoc block elements to ms.
 blockListToMs :: PandocMonad m
@@ -351,6 +351,8 @@ inlineToMs :: PandocMonad m => WriterOptions -> Inline -> MS m (Doc Text)
 inlineToMs opts (Span _ ils) = inlineListToMs opts ils
 inlineToMs opts (Emph lst) =
   withFontFeature 'I' (inlineListToMs opts lst)
+inlineToMs opts (Underline lst) =
+  inlineToMs opts (Emph lst)
 inlineToMs opts (Strong lst) =
   withFontFeature 'B' (inlineListToMs opts lst)
 inlineToMs opts (Strikeout lst) = do
@@ -400,7 +402,7 @@ inlineToMs opts (Math DisplayMath str) = do
   case res of
        Left il -> do
          contents <- inlineToMs opts il
-         return $ cr <> literal ".RS" $$ contents $$ literal ".RE"
+         return $ cr <> literal ".RS 3" $$ contents $$ literal ".RE"
        Right r -> return $
             cr <> literal ".EQ" $$ literal r $$ literal ".EN" <> cr
 inlineToMs _ il@(RawInline f str)

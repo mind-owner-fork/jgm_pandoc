@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE ExplicitForAll             #-}
 {-# LANGUAGE FlexibleContexts           #-}
@@ -10,7 +9,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {- |
    Module      : Text.Pandoc.Parsing
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -186,7 +185,6 @@ module Text.Pandoc.Parsing ( take1WhileP,
                              )
 where
 
-import Prelude
 import Control.Monad.Identity
 import Control.Monad.Reader
 import Data.Char (chr, isAlphaNum, isAscii, isAsciiUpper,
@@ -204,7 +202,7 @@ import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Pandoc.Asciify (toAsciiChar)
 import Text.Pandoc.Builder (Blocks, HasMeta (..), Inlines, trimInlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad, readFileFromDirs, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, readFileFromDirs, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -927,9 +925,16 @@ tableWith :: (Stream s m Char, HasReaderOptions st, Monad mf)
 tableWith headerParser rowParser lineParser footerParser = try $ do
   (aligns, widths, heads, rows) <- tableWith' headerParser rowParser
                                                 lineParser footerParser
-  return $ B.table mempty (zip aligns widths) <$> heads <*> rows
+  let th = TableHead nullAttr <$> heads
+      tb = (:[]) . TableBody nullAttr 0 [] <$> rows
+      tf = pure $ TableFoot nullAttr []
+  return $ B.table B.emptyCaption (zip aligns (map fromWidth widths)) <$> th <*> tb <*> tf
+  where
+    fromWidth n
+      | n > 0     = ColWidth n
+      | otherwise = ColWidthDefault
 
-type TableComponents mf = ([Alignment], [Double], mf [Blocks], mf [[Blocks]])
+type TableComponents mf = ([Alignment], [Double], mf [Row], mf [Row])
 
 tableWith' :: (Stream s m Char, HasReaderOptions st, Monad mf)
            => ParserT s st m (mf [Blocks], [Alignment], [Int])
@@ -945,7 +950,9 @@ tableWith' headerParser rowParser lineParser footerParser = try $ do
     let widths = if null indices
                     then replicate (length aligns) 0.0
                     else widthsFromIndices numColumns indices
-    return (aligns, widths, heads, lines')
+    let toRow =  Row nullAttr . map B.simpleCell
+        toHeaderRow l = if null l then [] else [toRow l]
+    return (aligns, widths, toHeaderRow <$> heads, map toRow <$> lines')
 
 -- Calculate relative widths of table columns, based on indices
 widthsFromIndices :: Int      -- Number of columns on terminal
@@ -1085,8 +1092,8 @@ removeOneLeadingSpace xs =
            Just (c, _) -> c == ' '
 
 -- | Parse footer for a grid table.
-gridTableFooter :: Stream s m Char => ParserT s st m Text
-gridTableFooter = blanklines
+gridTableFooter :: Stream s m Char => ParserT s st m ()
+gridTableFooter = optional blanklines
 
 ---
 
@@ -1138,6 +1145,7 @@ data ParserState = ParserState
       stateExamples          :: M.Map Text Int, -- ^ Map from example labels to numbers
       stateMacros            :: M.Map Text Macro, -- ^ Table of macros defined so far
       stateRstDefaultRole    :: Text,        -- ^ Current rST default interpreted text role
+      stateRstHighlight      :: Maybe Text,  -- ^ Current rST literal block language
       stateRstCustomRoles    :: M.Map Text (Text, Maybe Text, Attr), -- ^ Current rST custom text roles
       -- Triple represents: 1) Base role, 2) Optional format (only for :raw:
       -- roles), 3) Additional classes (rest of Attr is unused)).
@@ -1248,6 +1256,7 @@ defaultParserState =
                   stateExamples        = M.empty,
                   stateMacros          = M.empty,
                   stateRstDefaultRole  = "title-reference",
+                  stateRstHighlight    = Nothing,
                   stateRstCustomRoles  = M.empty,
                   stateCaption         = Nothing,
                   stateInHtmlBlock     = Nothing,

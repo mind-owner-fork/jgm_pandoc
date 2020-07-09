@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Blocks
-   Copyright   : Copyright (C) 2014-2019 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -16,7 +15,6 @@ module Text.Pandoc.Readers.Org.Blocks
   , meta
   ) where
 
-import Prelude
 import Text.Pandoc.Readers.Org.BlockStarts
 import Text.Pandoc.Readers.Org.DocumentTree (documentTree,
                                              unprunedHeadlineToBlocks)
@@ -28,7 +26,7 @@ import Text.Pandoc.Readers.Org.Shared (cleanLinkText, isImageFilename,
                                        originalLang, translateLang, exportsCode)
 
 import Text.Pandoc.Builder (Blocks, Inlines)
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.Pandoc.Shared (compactify, compactifyDL, safeRead)
@@ -36,7 +34,7 @@ import Text.Pandoc.Shared (compactify, compactifyDL, safeRead)
 import Control.Monad (foldM, guard, mplus, mzero, void)
 import Data.Char (isSpace)
 import Data.Default (Default)
-import Data.List (foldl')
+import Data.List (foldl', intersperse)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 
@@ -78,6 +76,7 @@ block = choice [ mempty <$ blanklines
                , list
                , latexFragment
                , noteBlock
+               , rawOrgLine
                , paraOrPlain
                ] <?> "block"
 
@@ -561,6 +560,8 @@ include = try $ do
        | otherwise        -> Para content
       _ -> blk
 
+-- | Parses a meta line which defines a raw block. Currently recognized:
+-- @#+LATEX:@, @#+HTML:@, @#+TEXINFO:@, and @#+BEAMER@.
 rawExportLine :: PandocMonad m => OrgParser m Blocks
 rawExportLine = try $ do
   metaLineStart
@@ -568,6 +569,14 @@ rawExportLine = try $ do
   if key `elem` ["latex", "html", "texinfo", "beamer"]
     then B.rawBlock key <$> anyLine
     else mzero
+
+-- | Parses any meta line, i.e., a line starting with @#+@, into a raw
+-- org block. This should be the last resort when trying to parse
+-- keywords. Leading spaces are discarded.
+rawOrgLine :: PandocMonad m => OrgParser m (F Blocks)
+rawOrgLine = do
+  line <- metaLineStart *> anyLine
+  returnF $ B.rawBlock "org" $ ("#+" <> line)
 
 commentLine :: Monad m => OrgParser m Blocks
 commentLine = commentLineStart *> anyLine *> pure mempty
@@ -599,7 +608,10 @@ data OrgTable = OrgTable
   }
 
 table :: PandocMonad m => OrgParser m (F Blocks)
-table = gridTableWith blocks True <|> orgTable
+table = do
+  withTables <- getExportSetting exportWithTables
+  tbl <- gridTableWith blocks True <|> orgTable
+  return $ if withTables then tbl else mempty
 
 -- | A normal org table
 orgTable :: PandocMonad m => OrgParser m (F Blocks)
@@ -629,16 +641,22 @@ orgToPandocTable (OrgTable colProps heads lns) caption =
   let totalWidth = if any (isJust . columnRelWidth) colProps
                    then Just . sum $ map (fromMaybe 1 . columnRelWidth) colProps
                    else Nothing
-  in B.table caption (map (convertColProp totalWidth) colProps) heads lns
+  in B.table (B.simpleCaption $ B.plain caption)
+             (map (convertColProp totalWidth) colProps)
+             (TableHead nullAttr $ toHeaderRow heads)
+             [TableBody nullAttr 0 [] $ map toRow lns]
+             (TableFoot nullAttr [])
  where
-   convertColProp :: Maybe Int -> ColumnProperty -> (Alignment, Double)
+   toRow = Row nullAttr . map B.simpleCell
+   toHeaderRow l = if null l then [] else [toRow l]
+   convertColProp :: Maybe Int -> ColumnProperty -> (Alignment, ColWidth)
    convertColProp totalWidth colProp =
      let
        align' = fromMaybe AlignDefault $ columnAlignment colProp
-       width' = fromMaybe 0 $ (\w t -> (fromIntegral w / fromIntegral t))
-                              <$> columnRelWidth colProp
-                              <*> totalWidth
-     in (align', width')
+       width' = (\w t -> (fromIntegral w / fromIntegral t))
+                <$> columnRelWidth colProp
+                <*> totalWidth
+     in (align', maybe ColWidthDefault ColWidth width')
 
 tableRows :: PandocMonad m => OrgParser m [OrgTableRow]
 tableRows = try $ many (tableAlignRow <|> tableHline <|> tableContentRow)
@@ -660,16 +678,16 @@ tableAlignRow = try $ do
   return $ OrgAlignRow colProps
 
 columnPropertyCell :: Monad m => OrgParser m ColumnProperty
-columnPropertyCell = emptyCell <|> propCell <?> "alignment info"
+columnPropertyCell = emptyOrgCell <|> propCell <?> "alignment info"
  where
-   emptyCell = ColumnProperty Nothing Nothing <$ try (skipSpaces *> endOfCell)
+   emptyOrgCell = ColumnProperty Nothing Nothing <$ try (skipSpaces *> endOfCell)
    propCell = try $ ColumnProperty
                  <$> (skipSpaces
                       *> char '<'
                       *> optionMaybe tableAlignFromChar)
                  <*> (optionMaybe (many1Char digit >>= safeRead)
                       <* char '>'
-                      <* emptyCell)
+                      <* emptyOrgCell)
 
 tableAlignFromChar :: Monad m => OrgParser m Alignment
 tableAlignFromChar = try $
@@ -735,22 +753,26 @@ rowToContent tbl row =
 --
 -- LaTeX fragments
 --
-latexFragment :: Monad m => OrgParser m (F Blocks)
+latexFragment :: PandocMonad m => OrgParser m (F Blocks)
 latexFragment = try $ do
   envName <- latexEnvStart
-  content <- mconcat <$> manyTill anyLineNewline (latexEnd envName)
-  returnF $ B.rawBlock "latex" (content `inLatexEnv` envName)
+  texOpt  <- getExportSetting exportWithLatex
+  let envStart = "\\begin{" <> envName <> "}"
+  let envEnd = "\\end{" <> envName <> "}"
+  envLines <- do
+    content <- manyTill anyLine (latexEnd envName)
+    return $ envStart : content ++ [envEnd]
+  returnF $ case texOpt of
+    TeXExport -> B.rawBlock "latex" . T.unlines $ envLines
+    TeXIgnore   -> mempty
+    TeXVerbatim -> B.para . mconcat . intersperse B.softbreak $
+                   map B.str envLines
  where
-   c `inLatexEnv` e = mconcat [ "\\begin{", e, "}\n"
-                              , c
-                              , "\\end{", e, "}\n"
-                              ]
-
-latexEnd :: Monad m => Text -> OrgParser m ()
-latexEnd envName = try $
-  () <$ skipSpaces
-     <* textStr ("\\end{" <> envName <> "}")
-     <* blankline
+  latexEnd :: Monad m => Text -> OrgParser m ()
+  latexEnd envName = try . void
+     $ skipSpaces
+    <* textStr ("\\end{" <> envName <> "}")
+    <* blankline
 
 
 --

@@ -2,7 +2,7 @@
 {- |
    Module      : Tests.Readers.Man
    Copyright   : © 2018-2019 Yan Pas <yanp.bugz@gmail.com>,
-                   2018-2019 John MacFarlane
+                   2018-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -29,6 +29,9 @@ infix 4 =:
 (=:) :: ToString c
      => String -> (Text, c) -> TestTree
 (=:) = test man
+
+toRow :: [Blocks] -> Row
+toRow = Row nullAttr . map simpleCell
 
 tests :: [TestTree]
 tests = [
@@ -80,7 +83,7 @@ tests = [
       "\\-\\ \\\\\\[lq]\\[rq]\\[em]\\[en]\\*(lq\\*(rq"
       =?>para (text "- \\“”—–“”")
     , "replace2" =:
-      "\\t\\e\\`\\^\\|\\'" =?>para (text "\\`\8202\8198`")
+      "\\t\\e\\`\\^\\|\\'" =?>para (text "\\`\8202\8198'")
     , "comment  with \\\"" =:
       "Foo \\\" bar\n" =?>para (text "Foo")
     , "comment with \\#" =:
@@ -122,12 +125,21 @@ tests = [
   testGroup "Tables" [
       "t1" =:
       ".TS\nallbox;\nl l l.\na\tb\tc\nd\te\tf\n.TE"
-      =?> table mempty (replicate 3 (AlignLeft, 0.0)) [] [
-        map (plain . str ) ["a", "b", "c"],
-        map (plain . str ) ["d", "e", "f"]
-      ],
+      =?> table
+            emptyCaption
+            (replicate 3 (AlignLeft, ColWidthDefault))
+            (TableHead nullAttr [])
+            [TableBody nullAttr 0 [] $ map toRow
+              [map (plain . str ) ["a", "b", "c"],
+               map (plain . str ) ["d", "e", "f"]]]
+            (TableFoot nullAttr []),
       "longcell" =:
       ".TS\n;\nr.\nT{\na\nb\nc d\nT}\nf\n.TE"
-      =?> table mempty [(AlignRight, 0.0)] [] [[plain $ text "a b c d"], [plain $ str "f"]]
+      =?> table
+            emptyCaption
+            [(AlignRight, ColWidthDefault)]
+            (TableHead nullAttr [])
+            [TableBody nullAttr 0 [] $ map toRow [[plain $ text "a b c d"], [plain $ str "f"]]]
+            (TableFoot nullAttr [])
     ]
   ]

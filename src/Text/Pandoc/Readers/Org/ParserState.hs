@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude     #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.ParserState
-   Copyright   : Copyright (C) 2014-2019 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -36,10 +35,10 @@ module Text.Pandoc.Readers.Org.ParserState
   , returnF
   , ExportSettings (..)
   , ArchivedTreesOption (..)
+  , TeXExport (..)
   , optionsToParserState
   ) where
 
-import Prelude
 import Control.Monad.Reader (ReaderT, asks, local)
 
 import Data.Default (Default (..))
@@ -233,6 +232,13 @@ data ArchivedTreesOption =
   | ArchivedTreesNoExport     -- ^ Exclude archived trees from exporting
   | ArchivedTreesHeadlineOnly -- ^ Export only the headline, discard the contents
 
+-- | Options for the handling of LaTeX environments and fragments.
+-- Represents allowed values of Emacs variable @org-export-with-latex@.
+data TeXExport
+  = TeXExport                 -- ^ Include raw TeX in the output
+  | TeXIgnore                 -- ^ Ignore raw TeX
+  | TeXVerbatim               -- ^ Keep everything in verbatim
+
 -- | Export settings <http://orgmode.org/manual/Export-settings.html>
 -- These settings can be changed via OPTIONS statements.
 data ExportSettings = ExportSettings
@@ -251,8 +257,12 @@ data ExportSettings = ExportSettings
   , exportWithAuthor       :: Bool -- ^ Include author in final meta-data
   , exportWithCreator      :: Bool -- ^ Include creator in final meta-data
   , exportWithEmail        :: Bool -- ^ Include email in final meta-data
+  , exportWithEntities     :: Bool -- ^ Include MathML-like entities
+  , exportWithFootnotes    :: Bool -- ^ Include footnotes
+  , exportWithLatex        :: TeXExport -- ^ Handling of raw TeX commands
   , exportWithPlanning     :: Bool -- ^ Keep planning info after headlines
   , exportWithTags         :: Bool -- ^ Keep tags as part of headlines
+  , exportWithTables       :: Bool -- ^ Include tables
   , exportWithTodoKeywords :: Bool -- ^ Keep TODO keywords in headers
   }
 
@@ -272,7 +282,11 @@ defaultExportSettings = ExportSettings
   , exportWithAuthor = True
   , exportWithCreator = True
   , exportWithEmail = True
+  , exportWithEntities = True
+  , exportWithFootnotes = True
+  , exportWithLatex = TeXExport
   , exportWithPlanning = False
   , exportWithTags = True
+  , exportWithTables = True
   , exportWithTodoKeywords = True
   }

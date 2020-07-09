@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.RST
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,7 +14,6 @@ Conversion of 'Pandoc' documents to reStructuredText.
 reStructuredText:  <http://docutils.sourceforge.net/rst.html>
 -}
 module Text.Pandoc.Writers.RST ( writeRST, flatten ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isSpace)
 import Data.List (transpose, intersperse)
@@ -23,7 +21,7 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -44,6 +42,7 @@ data WriterState =
               , stHasRawTeX   :: Bool
               , stOptions     :: WriterOptions
               , stTopLevel    :: Bool
+              , stImageId     :: Int
               }
 
 type RST = StateT WriterState
@@ -54,7 +53,7 @@ writeRST opts document = do
   let st = WriterState { stNotes = [], stLinks = [],
                          stImages = [], stHasMath = False,
                          stHasRawTeX = False, stOptions = opts,
-                         stTopLevel = True }
+                         stTopLevel = True, stImageId = 1 }
   evalStateT (pandocToRST document) st
 
 -- | Return RST representation of document.
@@ -286,7 +285,8 @@ blockToRST (CodeBlock (_,classes,kvs) str) = do
 blockToRST (BlockQuote blocks) = do
   contents <- blockListToRST blocks
   return $ nest 3 contents <> blankline
-blockToRST (Table caption aligns widths headers rows) = do
+blockToRST (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlineListToRST caption
   let blocksToDoc opts bs = do
          oldOpts <- gets stOptions
@@ -415,6 +415,7 @@ transformInlines =  insertBS .
         hasContents :: Inline -> Bool
         hasContents (Str "")              = False
         hasContents (Emph [])             = False
+        hasContents (Underline [])        = False
         hasContents (Strong [])           = False
         hasContents (Strikeout [])        = False
         hasContents (Superscript [])      = False
@@ -474,6 +475,7 @@ transformInlines =  insertBS .
         okBeforeComplex _ = False
         isComplex :: Inline -> Bool
         isComplex (Emph _)        = True
+        isComplex (Underline _)   = True
         isComplex (Strong _)      = True
         isComplex (SmallCaps _)   = True
         isComplex (Strikeout _)   = True
@@ -538,6 +540,7 @@ mapNested f i = setInlineChildren i (f (dropInlineParent i))
 dropInlineParent :: Inline -> [Inline]
 dropInlineParent (Link _ i _)    = i
 dropInlineParent (Emph i)        = i
+dropInlineParent (Underline i)   = i
 dropInlineParent (Strong i)      = i
 dropInlineParent (Strikeout i)   = i
 dropInlineParent (Superscript i) = i
@@ -552,6 +555,7 @@ dropInlineParent i               = [i] -- not a parent, like Str or Space
 setInlineChildren :: Inline -> [Inline] -> Inline
 setInlineChildren (Link a _ t) i    = Link a i t
 setInlineChildren (Emph _) i        = Emph i
+setInlineChildren (Underline _) i   = Underline i
 setInlineChildren (Strong _) i      = Strong i
 setInlineChildren (Strikeout _) i   = Strikeout i
 setInlineChildren (Superscript _) i = Superscript i
@@ -582,6 +586,9 @@ inlineToRST (Span (_,_,kvs) ils) = do
 inlineToRST (Emph lst) = do
   contents <- writeInlines lst
   return $ "*" <> contents <> "*"
+-- Underline is not supported, fall back to Emph
+inlineToRST (Underline lst) =
+  inlineToRST (Emph lst)
 inlineToRST (Strong lst) = do
   contents <- writeInlines lst
   return $ "**" <> contents <> "**"
@@ -688,13 +695,23 @@ inlineToRST (Note contents) = do
 registerImage :: PandocMonad m => Attr -> [Inline] -> Target -> Maybe Text -> RST m (Doc Text)
 registerImage attr alt (src,tit) mbtarget = do
   pics <- gets stImages
+  imgId <- gets stImageId
+  let getImageName = do
+        modify $ \st -> st{ stImageId = imgId + 1 }
+        return [Str ("image" <> tshow imgId)]
   txt <- case lookup alt pics of
-               Just (a,s,t,mbt) | (a,s,t,mbt) == (attr,src,tit,mbtarget)
-                 -> return alt
-               _ -> do
-                 let alt' = if null alt || alt == [Str ""]
-                               then [Str $ "image" <> tshow (length pics)]
-                               else alt
+               Just (a,s,t,mbt) ->
+                 if (a,s,t,mbt) == (attr,src,tit,mbtarget)
+                    then return alt
+                    else do
+                        alt' <- getImageName
+                        modify $ \st -> st { stImages =
+                           (alt', (attr,src,tit, mbtarget)):stImages st }
+                        return alt'
+               Nothing -> do
+                 alt' <- if null alt || alt == [Str ""]
+                            then getImageName
+                            else return alt
                  modify $ \st -> st { stImages =
                         (alt', (attr,src,tit, mbtarget)):stImages st }
                  return alt'

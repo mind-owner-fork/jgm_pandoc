@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.ConTeXt
-   Copyright   : Copyright (C) 2007-2019 John MacFarlane
+   Copyright   : Copyright (C) 2007-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,7 +13,6 @@
 Conversion of 'Pandoc' format into ConTeXt.
 -}
 module Text.Pandoc.Writers.ConTeXt ( writeConTeXt ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (ord, isDigit)
 import Data.List (intersperse)
@@ -23,7 +21,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Network.URI (unEscapeString)
 import Text.Pandoc.BCP47
-import Text.Pandoc.Class (PandocMonad, report, toLang)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report, toLang)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -257,7 +255,8 @@ blockToConTeXt (DefinitionList lst) =
 blockToConTeXt HorizontalRule = return $ "\\thinrule" <> blankline
 -- If this is ever executed, provide a default for the reference identifier.
 blockToConTeXt (Header level attr lst) = sectionHeader attr level lst
-blockToConTeXt (Table caption aligns widths heads rows) = do
+blockToConTeXt (Table _ blkCapt specs thead tbody tfoot) = do
+    let (caption, aligns, widths, heads, rows) = toLegacyTable blkCapt specs thead tbody tfoot
     opts <- gets stOptions
     let tabl = if isEnabled Ext_ntb opts
           then Ntb
@@ -369,6 +368,9 @@ inlineToConTeXt :: PandocMonad m
 inlineToConTeXt (Emph lst) = do
   contents <- inlineListToConTeXt lst
   return $ braces $ "\\em " <> contents
+inlineToConTeXt (Underline lst) = do
+  contents <- inlineListToConTeXt lst
+  return $ "\\underbar" <> braces contents
 inlineToConTeXt (Strong lst) = do
   contents <- inlineListToConTeXt lst
   return $ braces $ "\\bf " <> contents

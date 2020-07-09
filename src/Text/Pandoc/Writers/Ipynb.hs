@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.Writers.Ipynb
-   Copyright   : Copyright (C) 2019 John MacFarlane
+   Copyright   : Copyright (C) 2019-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,7 +14,6 @@ Ipynb (Jupyter notebook JSON format) writer for pandoc.
 -}
 module Text.Pandoc.Writers.Ipynb ( writeIpynb )
 where
-import Prelude
 import Control.Monad.State
 import qualified Data.Map as M
 import Data.Maybe (catMaybes, fromMaybe)
@@ -24,7 +22,7 @@ import Text.Pandoc.Definition
 import Data.Ipynb as Ipynb
 import Text.Pandoc.Walk (walkM)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class
+import Text.Pandoc.Class.PandocMonad
 import Text.Pandoc.Logging
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -99,7 +97,7 @@ addAttachment (Image attr lab (src,tit))
   return $ Image attr lab ("attachment:" <> src, tit)
 addAttachment x = return x
 
-extractCells :: PandocMonad m => WriterOptions -> [Block] -> m [Cell a]
+extractCells :: PandocMonad m => WriterOptions -> [Block] -> m [Ipynb.Cell a]
 extractCells _ [] = return []
 extractCells opts (Div (_id,classes,kvs) xs : bs)
   | "cell" `elem` classes
@@ -108,7 +106,7 @@ extractCells opts (Div (_id,classes,kvs) xs : bs)
       (newdoc, attachments) <-
         runStateT (walkM addAttachment (Pandoc nullMeta xs)) mempty
       source <- writeMarkdown opts{ writerTemplate = Nothing } newdoc
-      (Cell{
+      (Ipynb.Cell{
           cellType = Markdown
         , cellSource = Source $ breakLines $ T.stripEnd source
         , cellMetadata = meta
@@ -125,7 +123,7 @@ extractCells opts (Div (_id,classes,kvs) xs : bs)
       let meta = pairsToJSONMeta kvs
       outputs <- catMaybes <$> mapM blockToOutput rest
       let exeCount = lookup "execution_count" kvs >>= safeRead
-      (Cell{
+      (Ipynb.Cell{
           cellType = Ipynb.Code {
                 codeExecutionCount = exeCount
               , codeOutputs = outputs
@@ -145,7 +143,7 @@ extractCells opts (Div (_id,classes,kvs) xs : bs)
                   "markdown" -> "text/markdown"
                   "rst"      -> "text/x-rst"
                   _          -> f
-          (Cell{
+          (Ipynb.Cell{
               cellType = Raw
             , cellSource = Source $ breakLines raw
             , cellMetadata = if format' == "ipynb" -- means no format given
@@ -158,7 +156,7 @@ extractCells opts (CodeBlock (_id,classes,kvs) raw : bs)
   | "code" `elem` classes = do
       let meta = pairsToJSONMeta kvs
       let exeCount = lookup "execution_count" kvs >>= safeRead
-      (Cell{
+      (Ipynb.Cell{
           cellType = Ipynb.Code {
                 codeExecutionCount = exeCount
               , codeOutputs = []

@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.DocBook
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -12,7 +11,6 @@
 Conversion of DocBook XML to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.DocBook ( readDocBook ) where
-import Prelude
 import Control.Monad.State.Strict
 import Data.Char (isSpace, toUpper)
 import Data.Default
@@ -25,7 +23,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Pandoc.Builder
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Options
 import Text.Pandoc.Logging (LogMessage(..))
 import Text.Pandoc.Shared (crFilter, safeRead)
@@ -141,7 +139,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [x] emphasis - Emphasized text
 [x] entry - A cell in a table
 [ ] entrytbl - A subtable appearing in place of an Entry in a table
-[ ] envar - A software environment variable
+[x] envar - A software environment variable
 [x] epigraph - A short inscription at the beginning of a document or component
     note:  also handle embedded attribution tag
 [x] equation - A displayed mathematical equation
@@ -307,7 +305,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [ ] personblurb - A short description or note about a person
 [ ] personname - The personal name of an individual
 [ ] phone - A telephone number
-[ ] phrase - A span of text
+[x] phrase - A span of text
 [ ] pob - A post office box in an address
 [ ] postcode - A postal code in an address
 [x] preface - Introductory matter preceding the first chapter of a book
@@ -316,7 +314,7 @@ List of all DocBook tags, with [x] indicating implemented,
     sorted
 [ ] primaryie - A primary term in an index entry, not in the text
 [ ] printhistory - The printing history of a document
-[ ] procedure - A list of operations to be performed in a well-defined sequence
+[x] procedure - A list of operations to be performed in a well-defined sequence
 [ ] production - A production in a set of EBNF productions
 [ ] productionrecap - A cross-reference to an EBNF production
 [ ] productionset - A set of EBNF productions
@@ -365,7 +363,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [x] releaseinfo - Information about a particular release of a document
 [ ] remark - A remark (or comment) intended for presentation in a draft
     manuscript
-[ ] replaceable - Content that may or must be replaced by the user
+[x] replaceable - Content that may or must be replaced by the user
 [ ] returnvalue - The value returned by a function
 [ ] revdescription - A extended description of a revision to a document
 [ ] revhistory - A history of the revisions to a document
@@ -421,10 +419,10 @@ List of all DocBook tags, with [x] indicating implemented,
     elements
 [x] simplelist - An undecorated list of single words or short phrases
 [ ] simplemsgentry - A wrapper for a simpler entry in a message set
-[ ] simplesect - A section of a document with no subdivisions
+[x] simplesect - A section of a document with no subdivisions
 [ ] spanspec - Formatting information for a spanned column in a table
 [ ] state - A state or province in an address
-[ ] step - A unit of action in a procedure
+[x] step - A unit of action in a procedure
 [ ] stepalternatives - Alternative steps in a procedure
 [ ] street - A street address in an address
 [ ] structfield - A field in a structure (in the programming language sense)
@@ -435,7 +433,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [ ] subjectterm - A term in a group of terms describing the subject matter of
     a document
 [x] subscript - A subscript (as in H2O, the molecular formula for water)
-[ ] substeps - A wrapper for steps that occur within steps in a procedure
+[x] substeps - A wrapper for steps that occur within steps in a procedure
 [x] subtitle - The subtitle of a document
 [x] superscript - A superscript (as in x2, the mathematical notation for x
     multiplied by itself)
@@ -447,7 +445,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [ ] synopfragmentref - A reference to a fragment of a command synopsis
 [ ] synopsis - A general-purpose element for representing the syntax of
     commands or functions
-[ ] systemitem - A system-related item or term
+[x] systemitem - A system-related item or term
 [ ] table - A formal table in a document
 [ ] task - A task to be completed
 [ ] taskprerequisites - The prerequisites for a task
@@ -523,6 +521,7 @@ data DBState = DBState{ dbSectionLevel :: Int
                       , dbMeta         :: Meta
                       , dbBook         :: Bool
                       , dbFigureTitle  :: Inlines
+                      , dbFigureId     :: Text
                       , dbContent      :: [Content]
                       } deriving Show
 
@@ -532,6 +531,7 @@ instance Default DBState where
                , dbMeta = mempty
                , dbBook = False
                , dbFigureTitle = mempty
+               , dbFigureId = mempty
                , dbContent = [] }
 
 
@@ -559,9 +559,10 @@ getFigure e = do
   tit <- case filterChild (named "title") e of
               Just t  -> getInlines t
               Nothing -> return mempty
-  modify $ \st -> st{ dbFigureTitle = tit }
+  let ident = attrValue "id" e
+  modify $ \st -> st{ dbFigureTitle = tit, dbFigureId = ident }
   res <- getBlocks e
-  modify $ \st -> st{ dbFigureTitle = mempty }
+  modify $ \st -> st{ dbFigureTitle = mempty, dbFigureId = mempty }
   return res
 
 -- normalize input, consolidating adjacent Text and CRef elements
@@ -629,12 +630,12 @@ blockTags :: [String]
 blockTags = ["toc","index","para","formalpara","simpara",
            "ackno","epigraph","blockquote","bibliography","bibliodiv",
            "biblioentry","glossee","glosseealso","glossary",
-           "glossdiv","glosslist","chapter","appendix","preface",
-           "bridgehead","sect1","sect2","sect3","sect4","sect5","section",
+           "glossdiv","glosslist","chapter","appendix","preface","bridgehead",
+           "sect1","sect2","sect3","sect4","sect5","section","simplesect",
            "refsect1","refsect2","refsect3","refsection", "qandadiv",
            "question","answer","abstract","itemizedlist","orderedlist",
            "variablelist","article","book","table","informaltable",
-           "informalexample", "linegroup",
+           "informalexample", "linegroup","procedure","substeps",
            "screen","programlisting","example","calloutlist"] ++ admonitionTags
 
 admonitionTags :: [String]
@@ -657,6 +658,8 @@ addToStart toadd bs =
 -- A DocBook mediaobject is a wrapper around a set of alternative presentations
 getMediaobject :: PandocMonad m => Element -> DB m Inlines
 getMediaobject e = do
+  figTitle <- gets dbFigureTitle
+  ident <- gets dbFigureId
   (imageUrl, attr) <-
     case filterChild (named "imageobject") e of
       Nothing  -> return (mempty, nullAttr)
@@ -669,7 +672,11 @@ getMediaobject e = do
                                    h = case atVal "depth" of
                                          "" -> []
                                          d  -> [("height", d)]
-                                   atr = (atVal "id", T.words $ atVal "role", w ++ h)
+                                   id' = case atVal "id" of
+                                           x | T.null x  -> ident
+                                             | otherwise -> x
+                                   cs = T.words $ atVal "role"
+                                   atr = (id', cs, w ++ h)
                                in  return (atVal "fileref", atr)
   let getCaption el = case filterChild (\x -> named "caption" x
                                             || named "textobject" x
@@ -677,11 +684,10 @@ getMediaobject e = do
                         Nothing -> return mempty
                         Just z  -> mconcat <$>
                                          mapM parseInline (elContent z)
-  figTitle <- gets dbFigureTitle
-  let (caption, title) = if isNull figTitle
-                            then (getCaption e, "")
-                            else (return figTitle, "fig:")
-  fmap (imageWith attr imageUrl title) caption
+  let (capt, title) = if isNull figTitle
+                         then (getCaption e, "")
+                         else (return figTitle, "fig:")
+  fmap (imageWith attr imageUrl title) capt
 
 getBlocks :: PandocMonad m => Element -> DB m Blocks
 getBlocks e =  mconcat <$>
@@ -737,6 +743,9 @@ parseBlock (Elem e) =
         "sect4" -> sect 4
         "sect5" -> sect 5
         "section" -> gets dbSectionLevel >>= sect . (+1)
+        "simplesect" ->
+          gets dbSectionLevel >>=
+          sectWith (attrValue "id" e,["unnumbered"],[]) . (+1)
         "refsect1" -> sect 1
         "refsect2" -> sect 2
         "refsect3" -> sect 3
@@ -760,11 +769,12 @@ parseBlock (Elem e) =
                                "upperroman" -> UpperRoman
                                _            -> Decimal
           let start = fromMaybe 1 $
-                      (attrValue "override" <$> filterElement (named "listitem") e)
-                       >>= safeRead
+                      filterElement (named "listitem") e
+                       >>= safeRead . attrValue "override"
           orderedListWith (start,listStyle,DefaultDelim)
             <$> listitems
         "variablelist" -> definitionList <$> deflistitems
+        "procedure" -> bulletList <$> steps
         "figure" -> getFigure e
         "mediaobject" -> para <$> getMediaobject e
         "caption" -> skip
@@ -832,6 +842,7 @@ parseBlock (Elem e) =
          callouts = mapM getBlocks $ filterChildren (named "callout") e
          deflistitems = mapM parseVarListEntry $ filterChildren
                      (named "varlistentry") e
+         steps = mapM getBlocks $ filterChildren (named "step") e
          parseVarListEntry e' = do
                      let terms = filterChildren (named "term") e'
                      let items = filterChildren (named "listitem") e'
@@ -846,9 +857,9 @@ parseBlock (Elem e) =
                      return (mconcat $ intersperse (str "; ") terms', items')
          parseTable = do
                       let isCaption x = named "title" x || named "caption" x
-                      caption <- case filterChild isCaption e of
-                                       Just t  -> getInlines t
-                                       Nothing -> return mempty
+                      capt <- case filterChild isCaption e of
+                                    Just t  -> getInlines t
+                                    Nothing -> return mempty
                       let e' = fromMaybe e $ filterChild (named "tgroup") e
                       let isColspec x = named "colspec" x || named "col" x
                       let colspecs = case filterChild (named "colgroup") e' of
@@ -870,12 +881,12 @@ parseBlock (Elem e) =
                                                 Just "right"  -> AlignRight
                                                 Just "center" -> AlignCenter
                                                 _             -> AlignDefault
-                      let toWidth c = case findAttr (unqual "colwidth") c of
-                                                Just w -> fromMaybe 0
-                                                   $ safeRead $ "0" <> T.filter (\x ->
+                      let toWidth c = do
+                            w <- findAttr (unqual "colwidth") c
+                            n <- safeRead $ "0" <> T.filter (\x ->
                                                      (x >= '0' && x <= '9')
                                                       || x == '.') (T.pack w)
-                                                Nothing -> 0 :: Double
+                            if n > 0 then Just n else Nothing
                       let numrows = case bodyrows of
                                          [] -> 0
                                          xs -> maximum $ map length xs
@@ -883,31 +894,34 @@ parseBlock (Elem e) =
                                      [] -> replicate numrows AlignDefault
                                      cs -> map toAlignment cs
                       let widths = case colspecs of
-                                     []  -> replicate numrows 0
-                                     cs  -> let ws = map toWidth cs
-                                                tot = sum ws
-                                            in  if all (> 0) ws
-                                                   then map (/ tot) ws
-                                                   else replicate numrows 0
-                      let headrows' = if null headrows
-                                         then replicate numrows mempty
-                                         else headrows
-                      return $ table caption (zip aligns widths)
-                                 headrows' bodyrows
+                                     [] -> replicate numrows ColWidthDefault
+                                     cs -> let ws = map toWidth cs
+                                           in case sequence ws of
+                                                Just ws' -> let tot = sum ws'
+                                                            in  ColWidth . (/ tot) <$> ws'
+                                                Nothing  -> replicate numrows ColWidthDefault
+                      let toRow = Row nullAttr . map simpleCell
+                          toHeaderRow l = if null l then [] else [toRow l]
+                      return $ table (simpleCaption $ plain capt)
+                                     (zip aligns widths)
+                                     (TableHead nullAttr $ toHeaderRow headrows)
+                                     [TableBody nullAttr 0 [] $ map toRow bodyrows]
+                                     (TableFoot nullAttr [])
          isEntry x  = named "entry" x || named "td" x || named "th" x
          parseRow = mapM (parseMixed plain . elContent) . filterChildren isEntry
-         sect n = do isbook <- gets dbBook
-                     let n' = if isbook || n == 0 then n + 1 else n
-                     headerText <- case filterChild (named "title") e `mplus`
-                                        (filterChild (named "info") e >>=
-                                            filterChild (named "title")) of
-                                      Just t  -> getInlines t
-                                      Nothing -> return mempty
-                     modify $ \st -> st{ dbSectionLevel = n }
-                     b <- getBlocks e
-                     let ident = attrValue "id" e
-                     modify $ \st -> st{ dbSectionLevel = n - 1 }
-                     return $ headerWith (ident,[],[]) n' headerText <> b
+         sect n = sectWith (attrValue "id" e,[],[]) n
+         sectWith attr n = do
+           isbook <- gets dbBook
+           let n' = if isbook || n == 0 then n + 1 else n
+           headerText <- case filterChild (named "title") e `mplus`
+                              (filterChild (named "info") e >>=
+                                  filterChild (named "title")) of
+                            Just t  -> getInlines t
+                            Nothing -> return mempty
+           modify $ \st -> st{ dbSectionLevel = n }
+           b <- getBlocks e
+           modify $ \st -> st{ dbSectionLevel = n - 1 }
+           return $ headerWith attr n' headerText <> b
          lineItems = mapM getInlines $ filterChildren (named "line") e
          -- | Admonitions are parsed into a div. Following other Docbook tools that output HTML,
          -- we parse the optional title as a div with the @title@ class, and give the
@@ -944,6 +958,12 @@ parseInline (CRef ref) =
   return $ text $ maybe (T.toUpper $ T.pack ref) T.pack $ lookupEntity ref
 parseInline (Elem e) =
   case qName (elName e) of
+        "phrase" -> do
+          let ident = attrValue "id" e
+          let classes = T.words $ attrValue "class" e
+          if ident /= "" || classes /= []
+            then spanWith (ident,classes,[]) <$> innerInlines
+            else innerInlines
         "equation" -> equation e displayMath
         "informalequation" -> equation e displayMath
         "inlineequation" -> equation e math
@@ -964,6 +984,7 @@ parseInline (Elem e) =
         "classname" -> codeWithLang
         "code" -> codeWithLang
         "filename" -> codeWithLang
+        "envar" -> codeWithLang
         "literal" -> codeWithLang
         "computeroutput" -> codeWithLang
         "prompt" -> codeWithLang
@@ -971,6 +992,8 @@ parseInline (Elem e) =
         "option" -> codeWithLang
         "optional" -> do x <- getInlines e
                          return $ str "[" <> x <> str "]"
+        "replaceable" -> do x <- getInlines e
+                            return $ str "<" <> x <> str ">"
         "markup" -> codeWithLang
         "wordasword" -> emph <$> innerInlines
         "command" -> codeWithLang
@@ -980,6 +1003,7 @@ parseInline (Elem e) =
         "symbol"  -> codeWithLang
         "constant" -> codeWithLang
         "userinput" -> codeWithLang
+        "systemitem" -> codeWithLang
         "varargs" -> return $ code "(...)"
         "keycap" -> return (str $ T.pack $ strContent e)
         "keycombo" -> keycombo <$>

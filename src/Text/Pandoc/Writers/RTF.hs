@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.RTF
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,7 +13,6 @@ Conversion of 'Pandoc' documents to RTF (rich text format).
 -}
 module Text.Pandoc.Writers.RTF ( writeRTF
                                ) where
-import Prelude
 import Control.Monad.Except (catchError, throwError)
 import Control.Monad
 import qualified Data.ByteString as B
@@ -22,8 +20,8 @@ import Data.Char (chr, isDigit, ord)
 import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
-import Text.Pandoc.Class (PandocMonad, report)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
+import qualified Text.Pandoc.Class.PandocMonad as P
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
 import Text.Pandoc.ImageSize
@@ -256,7 +254,8 @@ blockToRTF indent alignment (Header level _ lst) = do
   contents <- inlinesToRTF lst
   return $ rtfPar indent 0 alignment $
              "\\b \\fs" <> tshow (40 - (level * 4)) <> " " <> contents
-blockToRTF indent alignment (Table caption aligns sizes headers rows) = do
+blockToRTF indent alignment (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, sizes, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlinesToRTF caption
   header' <- if all null headers
                 then return ""
@@ -352,6 +351,9 @@ inlineToRTF (Span _ lst) = inlinesToRTF lst
 inlineToRTF (Emph lst) = do
   contents <- inlinesToRTF lst
   return $ "{\\i " <> contents <> "}"
+inlineToRTF (Underline lst) = do
+  contents <- inlinesToRTF lst
+  return $ "{\\ul " <> contents <> "}"
 inlineToRTF (Strong lst) = do
   contents <- inlinesToRTF lst
   return $ "{\\b " <> contents <> "}"

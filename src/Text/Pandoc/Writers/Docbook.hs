@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards     #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Docbook
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,14 +13,13 @@
 Conversion of 'Pandoc' documents to Docbook XML.
 -}
 module Text.Pandoc.Writers.Docbook ( writeDocbook4, writeDocbook5 ) where
-import Prelude
 import Control.Monad.Reader
 import Data.Generics (everywhere, mkT)
 import Data.Monoid (Any (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Highlighting (languages, languagesByExtension)
 import Text.Pandoc.ImageSize
@@ -49,7 +47,8 @@ authorToDocbook opts name' = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
-  return $ B.rawInline "docbook" $ render colwidth $
+  return $ B.rawInline "docbook" $
+    render colwidth $ inTags True "personname" [] $
       if T.any (== ',') name
          then -- last name first
               let (lastname, rest) = T.break (==',') name
@@ -264,7 +263,8 @@ blockToDocbook _ b@(RawBlock f str)
       report $ BlockNotRendered b
       return empty
 blockToDocbook _ HorizontalRule = return empty -- not semantic
-blockToDocbook opts (Table caption aligns widths headers rows) = do
+blockToDocbook opts (Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   captionDoc <- if null caption
                    then return empty
                    else inTagsIndented "title" <$>
@@ -280,7 +280,7 @@ blockToDocbook opts (Table caption aligns widths headers rows) = do
   body' <- (inTagsIndented "tbody" . vcat) <$>
               mapM (tableRowToDocbook opts) rows
   return $ inTagsIndented tableType $ captionDoc $$
-        inTags True "tgroup" [("cols", tshow (length headers))] (
+        inTags True "tgroup" [("cols", tshow (length aligns))] (
          coltags $$ head' $$ body')
 
 hasLineBreaks :: [Inline] -> Bool
@@ -323,6 +323,8 @@ inlineToDocbook :: PandocMonad m => WriterOptions -> Inline -> DB m (Doc Text)
 inlineToDocbook _ (Str str) = return $ literal $ escapeStringForXML str
 inlineToDocbook opts (Emph lst) =
   inTagsSimple "emphasis" <$> inlinesToDocbook opts lst
+inlineToDocbook opts (Underline lst) =
+  inTags False "emphasis" [("role", "underline")] <$> inlinesToDocbook opts lst
 inlineToDocbook opts (Strong lst) =
   inTags False "emphasis" [("role", "strong")] <$> inlinesToDocbook opts lst
 inlineToDocbook opts (Strikeout lst) =

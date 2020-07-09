@@ -1,10 +1,9 @@
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.DocumentTree
-   Copyright   : Copyright (C) 2014-2019 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -16,14 +15,13 @@ module Text.Pandoc.Readers.Org.DocumentTree
   , unprunedHeadlineToBlocks
   ) where
 
-import Prelude
 import Control.Arrow ((***), first)
 import Control.Monad (guard)
 import Data.List (intersperse)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Text.Pandoc.Builder (Blocks, Inlines)
-import Text.Pandoc.Class (PandocMonad)
+import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Readers.Org.BlockStarts
 import Text.Pandoc.Readers.Org.ParserState

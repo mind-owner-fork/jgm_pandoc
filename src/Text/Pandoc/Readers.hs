@@ -1,10 +1,9 @@
 {-# LANGUAGE MonoLocalBinds      #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Readers
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -57,7 +56,6 @@ module Text.Pandoc.Readers
   , getDefaultExtensions
   ) where
 
-import Prelude
 import Control.Monad (unless)
 import Control.Monad.Except (throwError)
 import Data.Aeson

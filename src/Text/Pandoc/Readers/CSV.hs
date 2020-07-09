@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE FlexibleContexts    #-}
 
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.Readers.RST
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,7 +13,6 @@
 Conversion from CSV to a 'Pandoc' table.
 -}
 module Text.Pandoc.Readers.CSV ( readCSV ) where
-import Prelude
 import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.CSV (parseCSV, defaultCSVOptions)
@@ -32,13 +30,19 @@ readCSV :: PandocMonad m
         -> m Pandoc
 readCSV _opts s =
   case parseCSV defaultCSVOptions (crFilter s) of
-    Right (r:rs) -> return $ B.doc $ B.table capt (zip aligns widths) hdrs rows
-       where capt = mempty
+    Right (r:rs) -> return $ B.doc $ B.table capt
+                                             (zip aligns widths)
+                                             (TableHead nullAttr hdrs)
+                                             [TableBody nullAttr 0 [] rows]
+                                             (TableFoot nullAttr [])
+       where capt = B.emptyCaption
              numcols = length r
-             toplain = B.plain . B.text . T.strip
-             hdrs = map toplain r
-             rows = map (map toplain) rs
+             toplain = B.simpleCell . B.plain . B.text . T.strip
+             toRow = Row nullAttr . map toplain
+             toHeaderRow l = if null l then [] else [toRow l]
+             hdrs = toHeaderRow r
+             rows = map toRow rs
              aligns = replicate numcols AlignDefault
-             widths = replicate numcols 0
+             widths = replicate numcols ColWidthDefault
     Right []     -> return $ B.doc mempty
     Left e       -> throwError $ PandocParsecError s e

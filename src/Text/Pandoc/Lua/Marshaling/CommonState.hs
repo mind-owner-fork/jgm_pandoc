@@ -1,11 +1,10 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 {-# LANGUAGE LambdaCase           #-}
-{-# LANGUAGE NoImplicitPrelude    #-}
 {-# LANGUAGE OverloadedStrings    #-}
 {- |
    Module      : Text.Pandoc.Lua.Marshaling.CommonState
-   Copyright   : © 2012-2019 John MacFarlane
-                 © 2017-2019 Albert Krewinkel
+   Copyright   : © 2012-2020 John MacFarlane
+                 © 2017-2020 Albert Krewinkel
    License     : GNU GPL, version 2 or above
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
    Stability   : alpha
@@ -14,7 +13,6 @@ Instances to marshal (push) and unmarshal (peek) the common state.
 -}
 module Text.Pandoc.Lua.Marshaling.CommonState () where
 
-import Prelude
 import Foreign.Lua (Lua, Peekable, Pushable)
 import Foreign.Lua.Types.Peekable (reportValueOnFailure)
 import Foreign.Lua.Userdata (ensureUserdataMetatable, pushAnyWithMetatable,

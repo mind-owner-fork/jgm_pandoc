@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.XML
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -25,7 +24,6 @@ module Text.Pandoc.XML ( escapeCharForXML,
                          html5Attributes,
                          rdfaAttributes ) where
 
-import Prelude
 import Data.Char (isAscii, isSpace, ord)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -149,12 +147,14 @@ html5Attributes = Set.fromList
   , "accept-charset"
   , "accesskey"
   , "action"
+  , "allow"
   , "allowfullscreen"
   , "allowpaymentrequest"
   , "allowusermedia"
   , "alt"
   , "as"
   , "async"
+  , "autocapitalize"
   , "autocomplete"
   , "autofocus"
   , "autoplay"
@@ -172,6 +172,7 @@ html5Attributes = Set.fromList
   , "crossorigin"
   , "data"
   , "datetime"
+  , "decoding"
   , "default"
   , "defer"
   , "dir"
@@ -180,6 +181,7 @@ html5Attributes = Set.fromList
   , "download"
   , "draggable"
   , "enctype"
+  , "enterkeyhint"
   , "for"
   , "form"
   , "formaction"
@@ -195,6 +197,8 @@ html5Attributes = Set.fromList
   , "hreflang"
   , "http-equiv"
   , "id"
+  , "imagesizes"
+  , "imagesrcset"
   , "inputmode"
   , "integrity"
   , "is"
@@ -208,6 +212,7 @@ html5Attributes = Set.fromList
   , "label"
   , "lang"
   , "list"
+  , "loading"
   , "loop"
   , "low"
   , "manifest"

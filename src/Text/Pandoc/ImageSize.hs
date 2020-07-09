@@ -1,10 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables, CPP #-}
 {-# LANGUAGE ViewPatterns      #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 {- |
 Module      : Text.Pandoc.ImageSize
-Copyright   : Copyright (C) 2011-2019 John MacFarlane
+Copyright   : Copyright (C) 2011-2020 John MacFarlane
 License     : GNU GPL, version 2 or above
 
 Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -33,7 +32,6 @@ module Text.Pandoc.ImageSize ( ImageType(..)
                              , showInPixel
                              , showFl
                              ) where
-import Prelude
 import Data.ByteString (ByteString, unpack)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as BL

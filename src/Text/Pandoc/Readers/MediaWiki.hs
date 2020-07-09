@@ -1,10 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RelaxedPolyRec    #-}
--- RelaxedPolyRec needed for inlinesBetween on GHC < 7
 {- |
    Module      : Text.Pandoc.Readers.MediaWiki
-   Copyright   : Copyright (C) 2012-2019 John MacFarlane
+   Copyright   : Copyright (C) 2012-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -20,7 +17,6 @@ _ parse templates?
 -}
 module Text.Pandoc.Readers.MediaWiki ( readMediaWiki ) where
 
-import Prelude
 import Control.Monad
 import Control.Monad.Except (throwError)
 import Data.Char (isDigit, isSpace)
@@ -34,7 +30,7 @@ import qualified Data.Text as T
 import Text.HTML.TagSoup
 import Text.Pandoc.Builder (Blocks, Inlines, trimInlines)
 import qualified Text.Pandoc.Builder as B
-import Text.Pandoc.Class (PandocMonad (..))
+import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -223,9 +219,9 @@ table = do
   let restwidth = tableWidth - sum widths
   let zerocols = length $ filter (==0.0) widths
   let defaultwidth = if zerocols == 0 || zerocols == length widths
-                        then 0.0
-                        else restwidth / fromIntegral zerocols
-  let widths' = map (\w -> if w == 0 then defaultwidth else w) widths
+                        then ColWidthDefault
+                        else ColWidth $ restwidth / fromIntegral zerocols
+  let widths' = map (\w -> if w > 0 then ColWidth w else defaultwidth) widths
   let cellspecs = zip (map fst cellspecs') widths'
   rows' <- many $ try $ rowsep *> (map snd <$> tableRow)
   optional blanklines
@@ -234,7 +230,13 @@ table = do
   let (headers,rows) = if hasheader
                           then (hdr, rows')
                           else (replicate cols mempty, hdr:rows')
-  return $ B.table caption cellspecs headers rows
+  let toRow = Row nullAttr . map B.simpleCell
+      toHeaderRow l = if null l then [] else [toRow l]
+  return $ B.table (B.simpleCaption $ B.plain caption)
+                   cellspecs
+                   (TableHead nullAttr $ toHeaderRow headers)
+                   [TableBody nullAttr 0 [] $ map toRow rows]
+                   (TableFoot nullAttr [])
 
 parseAttrs :: PandocMonad m => MWParser m [(Text,Text)]
 parseAttrs = many1 parseAttr
@@ -397,7 +399,10 @@ header = try $ do
   lev <- length <$> many1 (char '=')
   guard $ lev <= 6
   contents <- trimInlines . mconcat <$> manyTill inline (count lev $ char '=')
-  attr <- modifyIdentifier <$> registerHeader nullAttr contents
+  opts <- mwOptions <$> getState
+  attr <- (if isEnabled Ext_gfm_auto_identifiers opts
+              then id
+              else modifyIdentifier) <$> registerHeader nullAttr contents
   return $ B.headerWith attr lev contents
 
 -- See #4731:

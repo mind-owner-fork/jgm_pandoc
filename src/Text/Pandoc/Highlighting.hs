@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Highlighting
-   Copyright   : Copyright (C) 2008-2019 John MacFarlane
+   Copyright   : Copyright (C) 2008-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -34,7 +33,6 @@ module Text.Pandoc.Highlighting ( highlightingStyles
                                 , fromListingsLanguage
                                 , toListingsLanguage
                                 ) where
-import Prelude
 import Control.Monad
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe)

@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE MultiWayIf          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -6,7 +5,7 @@
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.Markdown
-   Copyright   : Copyright (C) 2006-2019 John MacFarlane
+   Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -18,7 +17,6 @@ Conversion of 'Pandoc' documents to markdown-formatted plain text.
 Markdown:  <http://daringfireball.net/projects/markdown/>
 -}
 module Text.Pandoc.Writers.Markdown (writeMarkdown, writePlain) where
-import Prelude
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Data.Char (isAlphaNum)
@@ -32,7 +30,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Network.HTTP (urlEncode)
 import Text.HTML.TagSoup (Tag (..), isTagText, parseTags)
-import Text.Pandoc.Class (PandocMonad, report)
+import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -315,7 +313,12 @@ escapeText opts =
               case cs of
                    '.':'.':rest -> '\\':'.':'.':'.':go rest
                    _            -> '.':go cs
-       _   -> c : go cs
+       _   -> case cs of
+                '_':x:xs
+                  | isEnabled Ext_intraword_underscores opts
+                  , isAlphaNum c
+                  , isAlphaNum x -> c : '_' : x : go xs
+                _                -> c : go cs
 
 attrsToMarkdown :: Attr -> Doc Text
 attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
@@ -362,9 +365,9 @@ beginsWithOrderedListMarker str =
 
 notesAndRefs :: PandocMonad m => WriterOptions -> MD m (Doc Text)
 notesAndRefs opts = do
-  notes' <- reverse <$> gets stNotes >>= notesToMarkdown opts
+  notes' <- gets stNotes >>= notesToMarkdown opts . reverse
   modify $ \s -> s { stNotes = [] }
-  refs' <- reverse <$> gets stRefs >>= refsToMarkdown opts
+  refs' <- gets stRefs >>= refsToMarkdown opts . reverse
   modify $ \s -> s { stPrevRefs = stPrevRefs s ++ stRefs s
                    , stRefs = []}
 
@@ -576,14 +579,15 @@ blockToMarkdown' opts (BlockQuote blocks) = do
                   else if plain then "  " else "> "
   contents <- blockListToMarkdown opts blocks
   return $ (prefixed leader contents) <> blankline
-blockToMarkdown' opts t@(Table caption aligns widths headers rows) =  do
+blockToMarkdown' opts t@(Table _ blkCapt specs thead tbody tfoot) = do
+  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   let numcols = maximum (length aligns : length widths :
                            map length (headers:rows))
   caption' <- inlineListToMarkdown opts caption
   let caption'' = if null caption || not (isEnabled Ext_table_captions opts)
                      then blankline
                      else blankline $$ (": " <> caption') $$ blankline
-  let hasSimpleCells = onlySimpleTableCells $ headers:rows
+  let hasSimpleCells = onlySimpleTableCells $ headers : rows
   let isSimple = hasSimpleCells && all (==0) widths
   let isPlainBlock (Plain _) = True
       isPlainBlock _         = False
@@ -671,8 +675,8 @@ pipeTable :: PandocMonad m
 pipeTable headless aligns rawHeaders rawRows = do
   let sp = literal " "
   let blockFor AlignLeft   x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
-      blockFor AlignCenter x y = cblock (x + 2) (sp <> y) <> lblock 0 empty
-      blockFor AlignRight  x y = rblock (x + 2) (sp <> y) <> lblock 0 empty
+      blockFor AlignCenter x y = cblock (x + 2) (sp <> y <> sp) <> lblock 0 empty
+      blockFor AlignRight  x y = rblock (x + 2) (y <> sp) <> lblock 0 empty
       blockFor _           x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
   let widths = map (max 3 . maximum . map offset) $ transpose (rawHeaders : rawRows)
   let torow cs = nowrap $ literal "|" <>
@@ -1041,6 +1045,21 @@ inlineToMarkdown opts (Emph lst) = do
                       then "_" <> contents <> "_"
                       else contents
               else "*" <> contents <> "*"
+inlineToMarkdown _ (Underline []) = return empty
+inlineToMarkdown opts (Underline lst) = do
+  plain <- asks envPlain
+  contents <- inlineListToMarkdown opts lst
+  case plain of
+    True -> return contents
+    False | isEnabled Ext_bracketed_spans opts ->
+            return $ "[" <> contents <> "]" <> "{.ul}"
+          | isEnabled Ext_native_spans opts ->
+            return $ tagWithAttrs "span" ("", ["underline"], [])
+              <> contents
+              <> literal "</span>"
+          | isEnabled Ext_raw_html opts ->
+            return $ "<u>" <> contents <> "</u>"
+          | otherwise -> inlineToMarkdown opts (Emph lst)
 inlineToMarkdown _ (Strong []) = return empty
 inlineToMarkdown opts (Strong lst) = do
   plain <- asks envPlain

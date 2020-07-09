@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude          #-}
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {- |
    Module      : Text.Pandoc.Translations
-   Copyright   : Copyright (C) 2017-2019 John MacFarlane
+   Copyright   : Copyright (C) 2017-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -30,7 +29,6 @@ module Text.Pandoc.Translations (
                          , readTranslations
                          )
 where
-import Prelude
 import Data.Aeson.Types (Value(..), FromJSON(..))
 import qualified Data.Aeson.Types as Aeson
 import qualified Data.HashMap.Strict as HM

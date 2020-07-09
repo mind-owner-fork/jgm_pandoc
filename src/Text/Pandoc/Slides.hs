@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Slides
-   Copyright   : Copyright (C) 2012-2019 John MacFarlane
+   Copyright   : Copyright (C) 2012-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,7 +12,6 @@ Utility functions for splitting documents into slides for slide
 show formats (dzslides, revealjs, s5, slidy, slideous, beamer).
 -}
 module Text.Pandoc.Slides ( getSlideLevel, prepSlides ) where
-import Prelude
 import Text.Pandoc.Definition
 
 -- | Find level of header that starts slides (defined as the least header

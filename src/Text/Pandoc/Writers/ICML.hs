@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -6,7 +5,7 @@
 
 {- |
    Module      : Text.Pandoc.Writers.ICML
-   Copyright   : Copyright (C) 2013-2019 github.com/mb21
+   Copyright   : Copyright (C) 2013-2020 github.com/mb21
    License     : GNU GPL, version 2 or above
 
    Stability   : alpha
@@ -18,7 +17,6 @@ InCopy is the companion word-processor to Adobe InDesign and ICML documents can 
 into InDesign with File -> Place.
 -}
 module Text.Pandoc.Writers.ICML (writeICML) where
-import Prelude
 import Control.Monad.Except (catchError)
 import Control.Monad.State.Strict
 import Data.List (intersperse)
@@ -26,8 +24,7 @@ import Data.Maybe (fromMaybe, maybeToList)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import Data.Text (Text)
-import Text.Pandoc.Class (PandocMonad, report)
-import qualified Text.Pandoc.Class as P
+import Text.Pandoc.Class.PandocMonad (PandocMonad, fetchItem, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
@@ -63,6 +60,7 @@ defaultWriterState = WriterState{
 
 -- inline names (appear in InDesign's character styles pane)
 emphName        :: Text
+underlineName   :: Text
 strongName      :: Text
 strikeoutName   :: Text
 superscriptName :: Text
@@ -71,6 +69,7 @@ smallCapsName   :: Text
 codeName        :: Text
 linkName        :: Text
 emphName        = "Italic"
+underlineName   = "Underline"
 strongName      = "Bold"
 strikeoutName   = "Strikeout"
 superscriptName = "Superscript"
@@ -324,8 +323,9 @@ blockToICML opts style (Header lvl (_, cls, _) lst) =
                    else ""
   in parStyle opts stl lst
 blockToICML _ _ HorizontalRule = return empty -- we could insert a page break instead
-blockToICML opts style (Table caption aligns widths headers rows) =
-  let style' = tableName : style
+blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
+  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+      style' = tableName : style
       noHeader  = all null headers
       nrHeaders = if noHeader
                      then "0"
@@ -429,6 +429,7 @@ inlinesToICML opts style lst = vcat `fmap` mapM (inlineToICML opts style) (merge
 inlineToICML :: PandocMonad m => WriterOptions -> Style -> Inline -> WS m (Doc Text)
 inlineToICML _    style (Str str) = charStyle style $ literal $ escapeStringForXML str
 inlineToICML opts style (Emph lst) = inlinesToICML opts (emphName:style) lst
+inlineToICML opts style (Underline lst) = inlinesToICML opts (underlineName:style) lst
 inlineToICML opts style (Strong lst) = inlinesToICML opts (strongName:style) lst
 inlineToICML opts style (Strikeout lst) = inlinesToICML opts (strikeoutName:style) lst
 inlineToICML opts style (Superscript lst) = inlinesToICML opts (superscriptName:style) lst
@@ -552,7 +553,7 @@ styleToStrAttr style =
 imageICML :: PandocMonad m => WriterOptions -> Style -> Attr -> Target -> WS m (Doc Text)
 imageICML opts style attr (src, _) = do
   imgS <- catchError
-          (do (img, _) <- P.fetchItem src
+          (do (img, _) <- fetchItem src
               case imageSize opts img of
                 Right size -> return size
                 Left msg   -> do

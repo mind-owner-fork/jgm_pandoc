@@ -1,11 +1,10 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.Readers.Ipynb
-   Copyright   : Copyright (C) 2019 John MacFarlane
+   Copyright   : Copyright (C) 2019-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,7 +15,6 @@ Ipynb (Jupyter notebook JSON format) reader for pandoc.
 -}
 module Text.Pandoc.Readers.Ipynb ( readIpynb )
 where
-import Prelude
 import Data.Char (isDigit)
 import Data.Maybe (fromMaybe)
 import Data.Digest.Pure.SHA (sha1, showDigest)
@@ -26,7 +24,7 @@ import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Logging
 import Text.Pandoc.Definition
 import Data.Ipynb as Ipynb
-import Text.Pandoc.Class
+import Text.Pandoc.Class.PandocMonad
 import Text.Pandoc.MIME (extensionFromMimeType)
 import Text.Pandoc.Shared (tshow)
 import Text.Pandoc.UTF8
@@ -71,7 +69,7 @@ notebookToPandoc opts notebook = do
   return $ Pandoc (Meta $ M.insert "jupyter" (MetaMap m) mempty) blocks
 
 cellToBlocks :: PandocMonad m
-             => ReaderOptions -> Text -> Cell a -> m B.Blocks
+             => ReaderOptions -> Text -> Ipynb.Cell a -> m B.Blocks
 cellToBlocks opts lang c = do
   let Source ts = cellSource c
   let source = mconcat ts
@@ -158,8 +156,8 @@ handleData metadata (MimeBundle mb) =
   where
 
     dataBlock :: PandocMonad m => (MimeType, MimeData) -> m B.Blocks
-    dataBlock (mt, BinaryData bs)
-     | "image/" `T.isPrefixOf` mt
+    dataBlock (mt, d)
+     | "image/" `T.isPrefixOf` mt || mt == "application/pdf"
       = do
       -- normally metadata maps from mime types to key-value map;
       -- but not always...
@@ -170,7 +168,10 @@ handleData metadata (MimeBundle mb) =
                        Error _   -> mempty
                    _ -> mempty
       let metaPairs = jsonMetaToPairs meta
-      let bl = BL.fromStrict bs
+      let bl = case d of
+                 BinaryData bs  -> BL.fromStrict bs
+                 TextualData t  -> BL.fromStrict $ UTF8.fromText t
+                 JsonData v     -> encode v
       -- SHA1 hash for filename
       let fname = T.pack (showDigest (sha1 bl)) <>
             case extensionFromMimeType mt of
@@ -178,7 +179,6 @@ handleData metadata (MimeBundle mb) =
               Just ext -> "." <> ext
       insertMedia (T.unpack fname) (Just mt) bl
       return $ B.para $ B.imageWith ("",[],metaPairs) fname "" mempty
-     | otherwise = return mempty
 
     dataBlock ("text/html", TextualData t)
       = return $ B.rawBlock "html" t

@@ -4,7 +4,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {- |
    Module      : Text.Pandoc.Readers.Roff
-   Copyright   : Copyright (C) 2018-2019 Yan Pashkovsky and John MacFarlane
+   Copyright   : Copyright (C) 2018-2020 Yan Pashkovsky and John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Yan Pashkovsky <yanp.bugz@gmail.com>
@@ -28,11 +28,10 @@ module Text.Pandoc.Readers.Roff
   )
 where
 
-import Prelude
 import Safe (lastDef)
 import Control.Monad (void, mzero, mplus, guard)
 import Control.Monad.Except (throwError)
-import Text.Pandoc.Class
+import Text.Pandoc.Class.PandocMonad
        (getResourcePath, readFileFromDirs, PandocMonad(..), report)
 import Data.Char (isLower, toLower, toUpper, chr, isAscii, isAlphaNum)
 import Data.Default (Default)
@@ -202,7 +201,7 @@ escapeNormal = do
     '*' -> escString
     ',' -> return mempty  -- to fix spacing after roman
     '-' -> return [RoffStr "-"]
-    '.' -> return [RoffStr "`"]
+    '.' -> return [RoffStr "."]
     '/' -> return mempty  -- to fix spacing before roman
     '0' -> return [RoffStr "\x2007"] -- digit-width space
     ':' -> return mempty  -- zero-width break
@@ -226,7 +225,7 @@ escapeNormal = do
     'X' -> escIgnore 'X' [quoteArg]
     'Y' -> escIgnore 'Y' [escapeArg, countChar 1 (satisfy (/='\n'))]
     'Z' -> escIgnore 'Z' [quoteArg]
-    '\'' -> return [RoffStr "`"]
+    '\'' -> return [RoffStr "'"]
     '\n' -> return mempty  -- line continuation
     '^' -> return [RoffStr "\x200A"] -- 1/12 em space
     '_' -> return [RoffStr "_"]
