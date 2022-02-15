@@ -30,23 +30,23 @@ import Text.Pandoc.Definition
 import Text.Pandoc.Logging (Verbosity (..))
 import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (enclosed, nested)
-import Text.Pandoc.Shared (crFilter, safeRead)
+import Text.Pandoc.Shared (safeRead)
 import Text.Pandoc.XML (fromEntities)
 import Text.Printf (printf)
 
 -- | Read TikiWiki from an input string and return a Pandoc document.
-readTikiWiki :: PandocMonad m
+readTikiWiki :: (PandocMonad m, ToSources a)
           => ReaderOptions
-          -> Text
+          -> a
           -> m Pandoc
 readTikiWiki opts s = do
-  res <- readWithM parseTikiWiki def{ stateOptions = opts }
-             (crFilter s <> "\n\n")
+  let sources = ensureFinalNewlines 2 (toSources s)
+  res <- readWithM parseTikiWiki def{ stateOptions = opts } sources
   case res of
        Left e  -> throwError e
        Right d -> return d
 
-type TikiWikiParser = ParserT Text ParserState
+type TikiWikiParser = ParserT Sources ParserState
 
 --
 -- utility functions
@@ -125,7 +125,7 @@ header = tryMsg "header" $ do
   skipSpaces
   content <- B.trimInlines . mconcat <$> manyTill inline newline
   attr <- registerHeader nullAttr content
-  return $B.headerWith attr level content
+  return $ B.headerWith attr level content
 
 tableRow :: PandocMonad m => TikiWikiParser m [B.Blocks]
 tableRow = try $ do
@@ -163,11 +163,11 @@ table = try $ do
   string "||"
   newline
   -- return $ B.simpleTable (headers rows) $ trace ("rows: " ++ (show rows)) rows
-  return $B.simpleTable (headers rows) rows
+  return $ B.simpleTable (headers rows) rows
   where
     -- The headers are as many empty strings as the number of columns
     -- in the first row
-    headers rows = map (B.plain . B.str) $replicate (length $ head rows) ""
+    headers rows = replicate (length $ head rows) ((B.plain . B.str) "")
 
 para :: PandocMonad m => TikiWikiParser m B.Blocks
 para =  fmap (result . mconcat) ( many1Till inline endOfParaElement)

@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Shared
-   Copyright   : © 2006-2020 John MacFarlane
+   Copyright   : © 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -13,14 +12,16 @@ Tests for functions used in many parts of the library.
 -}
 module Tests.Shared (tests) where
 
-import Prelude
 import System.FilePath.Posix (joinPath)
 import Test.Tasty
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Text.Pandoc.Arbitrary ()
 import Text.Pandoc.Builder
 import Text.Pandoc.Shared
-import Text.Pandoc.Writers.Shared (toLegacyTable)
+import Test.Tasty.HUnit
+import Tests.Helpers
+import Text.Pandoc
+import Text.Pandoc.Writers.Shared
+import qualified Data.Text as T
 
 tests :: [TestTree]
 tests = [ testGroup "compactifyDL"
@@ -31,33 +32,65 @@ tests = [ testGroup "compactifyDL"
           ]
         , testGroup "collapseFilePath" testCollapse
         , testGroup "toLegacyTable" testLegacyTable
-        ]
+        , testGroup "table of contents" testTOC
+        ] 
+
+givesTOC :: String -> (Blocks, Blocks) -> TestTree
+givesTOC desc (blocks, toc) = test (toTableOfContents def) desc (toList blocks, head . toList $ toc)
+
+linkId :: T.Text -> T.Text -> T.Text -> Inlines -> Inlines
+linkId lId = linkWith (lId,[],[])
+
+headerId :: T.Text -> Int -> Inlines -> Blocks
+headerId hId = headerWith (hId,[],[])
+
+testTOC :: [TestTree]
+testTOC = [ givesTOC "empty case" $ mempty =?> bulletList []
+          , givesTOC "no headers" $ horizontalRule =?> bulletList []
+          , givesTOC "unlinked header" $
+              header 1 "H1" =?>
+              bulletList [plain "H1"]
+          , givesTOC "linked header" $
+              headerId "h1" 1 "H1" =?>
+              bulletList [plain $ linkId "toc-h1" "#h1" "" "H1"]
+          , givesTOC "nested headlines" $
+              header 1 "H1a" <> header 2 "H2" =?>
+              bulletList [plain "H1a" <> bulletList [plain "H2"]]
+          , givesTOC "only referenced headers" $
+              header 1 "H1a" <> headerId "h2" 2 "H2" =?>
+              bulletList [plain "H1a" <> 
+                          bulletList [plain $ linkId "toc-h2" "#h2" "" "H2"]]
+          , givesTOC "section id used as backup" $
+              divWith ("sec",["section"],[]) (header 1 "H1") =?>
+              bulletList [plain $ linkId "toc-sec" "#sec" "" "H1"]             
+          ]
 
 testCollapse :: [TestTree]
 testCollapse = map (testCase "collapse")
- [  collapseFilePath (joinPath [ ""]) @?= (joinPath [ ""])
- ,  collapseFilePath (joinPath [ ".","foo"]) @?= (joinPath [ "foo"])
- ,  collapseFilePath (joinPath [ ".",".","..","foo"]) @?= (joinPath [ joinPath ["..", "foo"]])
- ,  collapseFilePath (joinPath [ "..","foo"]) @?= (joinPath [ "..","foo"])
- ,  collapseFilePath (joinPath [ "","bar","..","baz"]) @?= (joinPath [ "","baz"])
- ,  collapseFilePath (joinPath [ "","..","baz"]) @?= (joinPath [ "","..","baz"])
- ,  collapseFilePath (joinPath [ ".","foo","..",".","bar","..",".",".","baz"]) @?= (joinPath [ "baz"])
- ,  collapseFilePath (joinPath [ ".",""]) @?= (joinPath [ ""])
- ,  collapseFilePath (joinPath [ ".",".",""]) @?= (joinPath [ ""])
- ,  collapseFilePath (joinPath [ "..",""]) @?= (joinPath [ ".."])
- ,  collapseFilePath (joinPath [ "..",".",""]) @?= (joinPath [ ".."])
- ,  collapseFilePath (joinPath [ ".","..",""]) @?= (joinPath [ ".."])
- ,  collapseFilePath (joinPath [ "..","..",""]) @?= (joinPath [ "..",".."])
- ,  collapseFilePath (joinPath [ "parent","foo","baz","..","bar"]) @?= (joinPath [ "parent","foo","bar"])
- ,  collapseFilePath (joinPath [ "parent","foo","baz","..","..","bar"]) @?= (joinPath [ "parent","bar"])
- ,  collapseFilePath (joinPath [ "parent","foo",".."]) @?= (joinPath [ "parent"])
- ,  collapseFilePath (joinPath [ "","parent","foo","..","..","bar"]) @?= (joinPath [ "","bar"])
- ,  collapseFilePath (joinPath [ "",".","parent","foo"]) @?= (joinPath [ "","parent","foo"])]
+ [  collapseFilePath (joinPath [ ""]) @?= joinPath [ ""]
+ ,  collapseFilePath (joinPath [ ".","foo"]) @?= joinPath [ "foo"]
+ ,  collapseFilePath (joinPath [ ".",".","..","foo"]) @?= joinPath [ joinPath ["..", "foo"]]
+ ,  collapseFilePath (joinPath [ "..","foo"]) @?= joinPath [ "..","foo"]
+ ,  collapseFilePath (joinPath [ "","bar","..","baz"]) @?= joinPath [ "","baz"]
+ ,  collapseFilePath (joinPath [ "","..","baz"]) @?= joinPath [ "","..","baz"]
+ ,  collapseFilePath (joinPath [ ".","foo","..",".","bar","..",".",".","baz"]) @?= joinPath [ "baz"]
+ ,  collapseFilePath (joinPath [ ".",""]) @?= joinPath [ ""]
+ ,  collapseFilePath (joinPath [ ".",".",""]) @?= joinPath [ ""]
+ ,  collapseFilePath (joinPath [ "..",""]) @?= joinPath [ ".."]
+ ,  collapseFilePath (joinPath [ "..",".",""]) @?= joinPath [ ".."]
+ ,  collapseFilePath (joinPath [ ".","..",""]) @?= joinPath [ ".."]
+ ,  collapseFilePath (joinPath [ "..","..",""]) @?= joinPath [ "..",".."]
+ ,  collapseFilePath (joinPath [ "parent","foo","baz","..","bar"]) @?= joinPath [ "parent","foo","bar"]
+ ,  collapseFilePath (joinPath [ "parent","foo","baz","..","..","bar"]) @?= joinPath [ "parent","bar"]
+ ,  collapseFilePath (joinPath [ "parent","foo",".."]) @?= joinPath [ "parent"]
+ ,  collapseFilePath (joinPath [ "","parent","foo","..","..","bar"]) @?= joinPath [ "","bar"]
+ ,  collapseFilePath (joinPath [ "",".","parent","foo"]) @?= joinPath [ "","parent","foo"]]
 
 testLegacyTable :: [TestTree]
 testLegacyTable =
   [ testCase "decomposes a table with head" $ gen1 @?= expect1
   , testCase "decomposes a table without head" $ gen2 @?= expect2
+  , testCase "decomposes the table from issue 7683" $ gen3 @?= expect3
   ]
   where
     pln = toList . plain . str
@@ -112,3 +145,18 @@ testLegacyTable =
                 ,[pln "j", mempty, mempty]]
               )
     gen2 = toLegacyTable emptyCaption spec1 (th []) [body1] (tf footRows1)
+
+    spec3 = replicate 4 (AlignDefault, ColWidthDefault)
+    body3 = tb 0
+      []
+      [[cl "a" 2 1, cl "b" 1 2, cl "c" 2 1]
+      ,[cl "d" 1 1, cl "e" 1 1]
+      ]
+    expect3 = ( []
+              , replicate 4 AlignDefault
+              , replicate 4 0
+              , []
+              , [[pln "a", pln "b", mempty, pln "c"]
+                ,[mempty, pln "d", pln "e", mempty]]
+              )
+    gen3 = toLegacyTable emptyCaption spec3 (th []) [body3] (tf [])

@@ -5,7 +5,7 @@
 {-# LANGUAGE TupleSections       #-}
 {- |
    Module      : Text.Pandoc.App
-   Copyright   : Copyright (C) 2006-2020 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -39,28 +39,29 @@ import Text.Pandoc.App.FormatHeuristics (formatFromFilePaths)
 import Text.Pandoc.App.Opt (Opt (..))
 import Text.Pandoc.App.CommandLineOptions (engines, lookupHighlightStyle,
                                           setVariable)
+import Text.Pandoc.Writers.Custom (writeCustom)
 import qualified Text.Pandoc.UTF8 as UTF8
 
 readUtf8File :: PandocMonad m => FilePath -> m T.Text
 readUtf8File = fmap UTF8.toText . readFileStrict
 
 -- | Settings specifying how document output should be produced.
-data OutputSettings = OutputSettings
+data OutputSettings m = OutputSettings
   { outputFormat :: T.Text
-  , outputWriter :: Writer PandocIO
+  , outputWriter :: Writer m
   , outputWriterName :: T.Text
   , outputWriterOptions :: WriterOptions
   , outputPdfProgram :: Maybe String
   }
 
 -- | Get output settings from command line options.
-optToOutputSettings :: Opt -> PandocIO OutputSettings
+optToOutputSettings :: (PandocMonad m, MonadIO m) => Opt -> m (OutputSettings m)
 optToOutputSettings opts = do
   let outputFile = fromMaybe "-" (optOutputFile opts)
 
   when (optDumpArgs opts) . liftIO $ do
-    UTF8.hPutStrLn stdout outputFile
-    mapM_ (UTF8.hPutStrLn stdout) (fromMaybe [] $ optInputFiles opts)
+    UTF8.hPutStrLn stdout (T.pack outputFile)
+    mapM_ (UTF8.hPutStrLn stdout . T.pack) (fromMaybe [] $ optInputFiles opts)
     exitSuccess
 
   epubMetadata <- traverse readUtf8File $ optEpubMetadata opts
@@ -90,12 +91,31 @@ optToOutputSettings opts = do
                   then writerName
                   else T.toLower $ baseWriterName writerName
 
-  (writer :: Writer PandocIO, writerExts) <-
+  let makeSandboxed pureWriter =
+          let files = maybe id (:) (optReferenceDoc opts) .
+                      maybe id (:) (optEpubMetadata opts) .
+                      maybe id (:) (optEpubCoverImage opts) .
+                      maybe id (:) (optCSL opts) .
+                      maybe id (:) (optCitationAbbreviations opts) $
+                      optEpubFonts opts ++
+                      optBibliography opts
+           in  case pureWriter of
+                 TextWriter w -> TextWriter $ \o d -> sandbox files (w o d)
+                 ByteStringWriter w
+                            -> ByteStringWriter $ \o d -> sandbox files (w o d)
+
+
+  (writer, writerExts) <-
             if ".lua" `T.isSuffixOf` format
                then return (TextWriter
-                       (\o d -> writeCustom (T.unpack writerName) o d)
-                               :: Writer PandocIO, mempty)
-               else getWriter (T.toLower writerName)
+                       (\o d -> writeCustom (T.unpack writerName) o d), mempty)
+               else if optSandbox opts
+                       then
+                         case runPure (getWriter writerName) of
+                           Left e -> throwError e
+                           Right (w, wexts) ->
+                                  return (makeSandboxed w, wexts)
+                       else getWriter (T.toLower writerName)
 
   let standalone = optStandalone opts || not (isTextFormat format) || pdfOutput
 
@@ -234,6 +254,10 @@ pdfWriterAndProg mWriter mEngine =
       go Nothing Nothing       = Right ("latex", "pdflatex")
       go (Just writer) Nothing = (writer,) <$> engineForWriter writer
       go Nothing (Just engine) = (,engine) <$> writerForEngine (takeBaseName engine)
+      go (Just writer) (Just engine) | isCustomWriter writer =
+           -- custom writers can produce any format, so assume the user knows
+           -- what they are doing.
+           Right (writer, engine)
       go (Just writer) (Just engine) =
            case find (== (baseWriterName writer, takeBaseName engine)) engines of
                 Just _  -> Right (writer, engine)
@@ -246,10 +270,12 @@ pdfWriterAndProg mWriter mEngine =
                                    "pdf-engine " <> T.pack eng <> " not known"
 
       engineForWriter "pdf" = Left "pdf writer"
-      engineForWriter w = case [e |  (f,e) <- engines, f == baseWriterName w] of
+      engineForWriter w = case [e | (f,e) <- engines, f == baseWriterName w] of
                                 eng : _ -> Right eng
                                 []      -> Left $
                                    "cannot produce pdf output from " <> w
+
+      isCustomWriter w = ".lua" `T.isSuffixOf` w
 
 isTextFormat :: T.Text -> Bool
 isTextFormat s =

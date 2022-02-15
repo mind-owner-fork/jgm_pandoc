@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Shared
-   Copyright   : Copyright (C) 2013-2020 John MacFarlane
+   Copyright   : Copyright (C) 2013-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -20,6 +20,7 @@ module Text.Pandoc.Writers.Shared (
                      , setField
                      , resetField
                      , defField
+                     , getLang
                      , tagWithAttrs
                      , isDisplayMath
                      , fixDisplayMath
@@ -35,6 +36,7 @@ module Text.Pandoc.Writers.Shared (
                      , toTableOfContents
                      , endsWithPlain
                      , toLegacyTable
+                     , splitSentences
                      )
 where
 import Safe (lastMay)
@@ -44,9 +46,11 @@ import Control.Monad (zipWithM)
 import Data.Aeson (ToJSON (..), encode)
 import Data.Char (chr, ord, isSpace)
 import Data.List (groupBy, intersperse, transpose, foldl')
+import Data.List.NonEmpty (NonEmpty(..), nonEmpty)
 import Data.Text.Conversions (FromText(..))
 import qualified Data.Map as M
 import qualified Data.Text as T
+import Data.Text (Text)
 import qualified Text.Pandoc.Builder as Builder
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
@@ -78,8 +82,8 @@ metaToContext opts blockWriter inlineWriter meta =
 -- | Like 'metaToContext, but does not include variables and is
 -- not sensitive to 'writerTemplate'.
 metaToContext' :: (Monad m, TemplateTarget a)
-           => ([Block] -> m (Doc a))
-           -> ([Inline] -> m (Doc a))
+           => ([Block] -> m (Doc a))     -- ^ block writer
+           -> ([Inline] -> m (Doc a))    -- ^ inline writer
            -> Meta
            -> m (Context a)
 metaToContext' blockWriter inlineWriter (Meta metamap) =
@@ -98,17 +102,18 @@ addVariablesToContext opts c1 =
                                mempty
    jsonrep = UTF8.toText $ BL.toStrict $ encode $ toJSON c1
 
+-- | Converts a 'MetaValue' into a doctemplate 'Val', using the given
+-- converter functions.
 metaValueToVal :: (Monad m, TemplateTarget a)
-               => ([Block] -> m (Doc a))
-               -> ([Inline] -> m (Doc a))
+               => ([Block] -> m (Doc a))    -- ^ block writer
+               -> ([Inline] -> m (Doc a))   -- ^ inline writer
                -> MetaValue
                -> m (Val a)
 metaValueToVal blockWriter inlineWriter (MetaMap metamap) =
   MapVal . Context <$> mapM (metaValueToVal blockWriter inlineWriter) metamap
 metaValueToVal blockWriter inlineWriter (MetaList xs) = ListVal <$>
   mapM (metaValueToVal blockWriter inlineWriter) xs
-metaValueToVal _ _ (MetaBool True) = return $ SimpleVal "true"
-metaValueToVal _ _ (MetaBool False) = return NullVal
+metaValueToVal _ _ (MetaBool b) = return $ BoolVal b
 metaValueToVal _ inlineWriter (MetaString s) =
    SimpleVal <$> inlineWriter (Builder.toList (Builder.text s))
 metaValueToVal blockWriter _ (MetaBlocks bs) = SimpleVal <$> blockWriter bs
@@ -116,13 +121,13 @@ metaValueToVal _ inlineWriter (MetaInlines is) = SimpleVal <$> inlineWriter is
 
 
 -- | Retrieve a field value from a template context.
-getField   :: FromContext a b => T.Text -> Context a -> Maybe b
+getField   :: FromContext a b => Text -> Context a -> Maybe b
 getField field (Context m) = M.lookup field m >>= fromVal
 
 -- | Set a field of a template context.  If the field already has a value,
 -- convert it into a list with the new value appended to the old value(s).
 -- This is a utility function to be used in preparing template contexts.
-setField   :: ToContext a b => T.Text -> b -> Context a -> Context a
+setField   :: ToContext a b => Text -> b -> Context a -> Context a
 setField field val (Context m) =
   Context $ M.insertWith combine field (toVal val) m
  where
@@ -132,21 +137,34 @@ setField field val (Context m) =
 -- | Reset a field of a template context.  If the field already has a
 -- value, the new value replaces it.
 -- This is a utility function to be used in preparing template contexts.
-resetField :: ToContext a b => T.Text -> b -> Context a -> Context a
+resetField :: ToContext a b => Text -> b -> Context a -> Context a
 resetField field val (Context m) =
   Context (M.insert field (toVal val) m)
 
 -- | Set a field of a template context if it currently has no value.
 -- If it has a value, do nothing.
 -- This is a utility function to be used in preparing template contexts.
-defField   :: ToContext a b => T.Text -> b -> Context a -> Context a
+defField   :: ToContext a b => Text -> b -> Context a -> Context a
 defField field val (Context m) =
   Context (M.insertWith f field (toVal val) m)
   where
     f _newval oldval = oldval
 
--- Produce an HTML tag with the given pandoc attributes.
-tagWithAttrs :: HasChars a => T.Text -> Attr -> Doc a
+-- | Get the contents of the `lang` metadata field or variable.
+getLang :: WriterOptions -> Meta -> Maybe Text
+getLang opts meta =
+  case lookupContext "lang" (writerVariables opts) of
+        Just s -> Just s
+        _      ->
+          case lookupMeta "lang" meta of
+               Just (MetaBlocks [Para [Str s]])  -> Just s
+               Just (MetaBlocks [Plain [Str s]]) -> Just s
+               Just (MetaInlines [Str s])        -> Just s
+               Just (MetaString s)               -> Just s
+               _                                 -> Nothing
+
+-- | Produce an HTML tag with the given pandoc attributes.
+tagWithAttrs :: HasChars a => Text -> Attr -> Doc a
 tagWithAttrs tag (ident,classes,kvs) = hsep
   ["<" <> text (T.unpack tag)
   ,if T.null ident
@@ -159,18 +177,21 @@ tagWithAttrs tag (ident,classes,kvs) = hsep
                 doubleQuotes (text $ T.unpack (escapeStringForXML v))) kvs)
   ] <> ">"
 
+-- | Returns 'True' iff the argument is an inline 'Math' element of type
+-- 'DisplayMath'.
 isDisplayMath :: Inline -> Bool
 isDisplayMath (Math DisplayMath _)          = True
 isDisplayMath (Span _ [Math DisplayMath _]) = True
 isDisplayMath _                             = False
 
+-- | Remove leading and trailing 'Space' and 'SoftBreak' elements.
 stripLeadingTrailingSpace :: [Inline] -> [Inline]
 stripLeadingTrailingSpace = go . reverse . go . reverse
   where go (Space:xs)     = xs
         go (SoftBreak:xs) = xs
         go xs             = xs
 
--- Put display math in its own block (for ODT/DOCX).
+-- | Put display math in its own block (for ODT/DOCX).
 fixDisplayMath :: Block -> Block
 fixDisplayMath (Plain lst)
   | any isDisplayMath lst && not (all isDisplayMath lst) =
@@ -192,7 +213,9 @@ fixDisplayMath (Para lst)
                          not (isDisplayMath x || isDisplayMath y)) lst
 fixDisplayMath x = x
 
-unsmartify :: WriterOptions -> T.Text -> T.Text
+-- | Converts a Unicode character into the ASCII sequence used to
+-- represent the character in "smart" Markdown.
+unsmartify :: WriterOptions -> Text -> Text
 unsmartify opts = T.concatMap $ \c -> case c of
   '\8217' -> "'"
   '\8230' -> "..."
@@ -218,7 +241,7 @@ gridTable :: (Monad m, HasChars a)
           -> m (Doc a)
 gridTable opts blocksToDoc headless aligns widths headers rows = do
   -- the number of columns will be used in case of even widths
-  let numcols = maximum (length aligns : length widths :
+  let numcols = maximum (length aligns :| length widths :
                            map length (headers:rows))
   let officialWidthsInChars widths' = map (
                         (\x -> if x < 1 then 1 else x) .
@@ -247,8 +270,7 @@ gridTable opts blocksToDoc headless aligns widths headers rows = do
   let handleFullWidths widths' = do
         rawHeaders' <- mapM (blocksToDoc opts) headers
         rawRows' <- mapM (mapM (blocksToDoc opts)) rows
-        let numChars [] = 0
-            numChars xs = maximum . map offset $ xs
+        let numChars = maybe 0 maximum . nonEmpty . map offset
         let minWidthsInChars =
                 map numChars $ transpose (rawHeaders' : rawRows')
         let widthsInChars' = zipWith max
@@ -325,7 +347,7 @@ gridTable opts blocksToDoc headless aligns widths headers rows = do
 
 -- | Retrieve the metadata value for a given @key@
 -- and convert to Bool.
-lookupMetaBool :: T.Text -> Meta -> Bool
+lookupMetaBool :: Text -> Meta -> Bool
 lookupMetaBool key meta =
   case lookupMeta key meta of
       Just (MetaBlocks _)  -> True
@@ -336,7 +358,7 @@ lookupMetaBool key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and extract blocks.
-lookupMetaBlocks :: T.Text -> Meta -> [Block]
+lookupMetaBlocks :: Text -> Meta -> [Block]
 lookupMetaBlocks key meta =
   case lookupMeta key meta of
          Just (MetaBlocks bs)   -> bs
@@ -346,7 +368,7 @@ lookupMetaBlocks key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and extract inlines.
-lookupMetaInlines :: T.Text -> Meta -> [Inline]
+lookupMetaInlines :: Text -> Meta -> [Inline]
 lookupMetaInlines key meta =
   case lookupMeta key meta of
          Just (MetaString s)           -> [Str s]
@@ -357,7 +379,7 @@ lookupMetaInlines key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and convert to String.
-lookupMetaString :: T.Text -> Meta -> T.Text
+lookupMetaString :: Text -> Meta -> Text
 lookupMetaString key meta =
   case lookupMeta key meta of
          Just (MetaString s)    -> s
@@ -366,12 +388,15 @@ lookupMetaString key meta =
          Just (MetaBool b)      -> T.pack (show b)
          _                      -> ""
 
+-- | Tries to convert a character into a unicode superscript version of
+-- the character.
 toSuperscript :: Char -> Maybe Char
 toSuperscript '1' = Just '\x00B9'
 toSuperscript '2' = Just '\x00B2'
 toSuperscript '3' = Just '\x00B3'
 toSuperscript '+' = Just '\x207A'
 toSuperscript '-' = Just '\x207B'
+toSuperscript '\x2212' = Just '\x207B' -- unicode minus
 toSuperscript '=' = Just '\x207C'
 toSuperscript '(' = Just '\x207D'
 toSuperscript ')' = Just '\x207E'
@@ -381,6 +406,8 @@ toSuperscript c
   | isSpace c = Just c
   | otherwise = Nothing
 
+-- | Tries to convert a character into a unicode subscript version of
+-- the character.
 toSubscript :: Char -> Maybe Char
 toSubscript '+' = Just '\x208A'
 toSubscript '-' = Just '\x208B'
@@ -402,7 +429,8 @@ toTableOfContents opts bs =
              $ map (sectionToListItem opts)
              $ makeSections (writerNumberSections opts) Nothing bs
 
--- | Converts an Element to a list item for a table of contents,
+-- | Converts a section Div to a list item for a table of contents;
+-- returns an empty list if the given block is not a section Div.
 sectionToListItem :: WriterOptions -> Block -> [Block]
 sectionToListItem opts (Div (ident,_,_)
                          (Header lev (_,classes,kvs) ils : subsecs))
@@ -418,15 +446,19 @@ sectionToListItem opts (Div (ident,_,_)
    headerText' = addNumber $ walk (deLink . deNote) ils
    headerLink = if T.null ident
                    then headerText'
-                   else [Link nullAttr headerText' ("#" <> ident, "")]
+                   else [Link ("toc-" <> ident, [], []) headerText' ("#" <> ident, "")]
    listContents = filter (not . null) $ map (sectionToListItem opts) subsecs
 sectionToListItem _ _ = []
 
+-- | Returns 'True' iff the list of blocks has a @'Plain'@ as its last
+-- element.
 endsWithPlain :: [Block] -> Bool
 endsWithPlain xs =
   case lastMay xs of
     Just Plain{} -> True
-    _            -> False
+    Just (BulletList is) -> maybe False endsWithPlain (lastMay is)
+    Just (OrderedList _ is) -> maybe False endsWithPlain (lastMay is)
+    _ -> False
 
 -- | Convert the relevant components of a new-style table (with block
 -- caption, row headers, row and column spans, and so on) to those of
@@ -478,7 +510,7 @@ toLegacyTable (Caption _ cbody) specs thead tbodies tfoot
       = let (h, w, cBody) = getComponents c
             cRowPieces = cBody : replicate (w - 1) mempty
             cPendingPieces = replicate w $ replicate (h - 1) mempty
-            pendingPieces' = dropWhile null pendingPieces
+            pendingPieces' = drop w pendingPieces
             (pendingPieces'', rowPieces) = placeCutCells pendingPieces' cells'
         in (cPendingPieces <> pendingPieces'', cRowPieces <> rowPieces)
       | otherwise = ([], [])
@@ -491,3 +523,27 @@ toLegacyTable (Caption _ cbody) specs thead tbodies tfoot
 
     getComponents (Cell _ _ (RowSpan h) (ColSpan w) body)
       = (h, w, body)
+
+splitSentences :: Doc Text -> Doc Text
+splitSentences = go . toList
+ where
+  go [] = mempty
+  go (Text len t : BreakingSpace : xs) =
+     if isSentenceEnding t
+        then Text len t <> NewLine <> go xs
+        else Text len t <> BreakingSpace <> go xs
+  go (x:xs) = x <> go xs
+
+  toList (Concat (Concat a b) c) = toList (Concat a (Concat b c))
+  toList (Concat a b) = a : toList b
+  toList x = [x]
+
+  isSentenceEnding t =
+    case T.unsnoc t of
+      Just (t',c)
+        | c == '.' || c == '!' || c == '?' -> True
+        | c == ')' || c == ']' || c == '"' || c == '\x201D' ->
+           case T.unsnoc t' of
+             Just (_,d) -> d == '.' || d == '!' || d == '?'
+             _ -> False
+      _ -> False

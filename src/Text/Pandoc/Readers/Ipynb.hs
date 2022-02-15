@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
    Module      : Text.Pandoc.Readers.Ipynb
-   Copyright   : Copyright (C) 2019-2020 John MacFarlane
+   Copyright   : Copyright (C) 2019-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -19,6 +19,7 @@ import Data.Char (isDigit)
 import Data.Maybe (fromMaybe)
 import Data.Digest.Pure.SHA (sha1, showDigest)
 import Text.Pandoc.Options
+import Control.Applicative ((<|>))
 import qualified Data.Scientific as Scientific
 import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Logging
@@ -39,10 +40,12 @@ import Data.Aeson as Aeson
 import Control.Monad.Except (throwError)
 import Text.Pandoc.Readers.Markdown (readMarkdown)
 import qualified Text.Pandoc.UTF8 as UTF8
+import Text.Pandoc.Sources (ToSources(..), sourcesToText)
 
-readIpynb :: PandocMonad m => ReaderOptions -> Text -> m Pandoc
-readIpynb opts t = do
-  let src = BL.fromStrict (TE.encodeUtf8 t)
+readIpynb :: (PandocMonad m, ToSources a)
+          => ReaderOptions -> a -> m Pandoc
+readIpynb opts x = do
+  let src = BL.fromStrict . TE.encodeUtf8 . sourcesToText $ toSources x
   case eitherDecode src of
     Right (notebook4 :: Notebook NbV4) -> notebookToPandoc opts notebook4
     Left _ ->
@@ -74,34 +77,46 @@ cellToBlocks opts lang c = do
   let Source ts = cellSource c
   let source = mconcat ts
   let kvs = jsonMetaToPairs (cellMetadata c)
-  let attachments = maybe mempty M.toList $ cellAttachments c
+  let attachments = case cellAttachments c of
+                      Nothing -> mempty
+                      Just (MimeAttachments m) -> M.toList m
+  let ident = fromMaybe mempty $ cellId c
   mapM_ addAttachment attachments
   case cellType c of
     Ipynb.Markdown -> do
-      Pandoc _ bs <- walk fixImage <$> readMarkdown opts source
-      return $ B.divWith ("",["cell","markdown"],kvs)
+      bs <- if isEnabled Ext_raw_markdown opts
+               then return [RawBlock (Format "markdown") source]
+               else do
+                 Pandoc _ bs <- walk fixImage <$> readMarkdown opts source
+                 return bs
+      return $ B.divWith (ident,["cell","markdown"],kvs)
              $ B.fromList bs
     Ipynb.Heading lev -> do
       Pandoc _ bs <- readMarkdown opts
         (T.replicate lev "#" <> " " <> source)
-      return $ B.divWith ("",["cell","markdown"],kvs)
+      return $ B.divWith (ident,["cell","markdown"],kvs)
              $ B.fromList bs
     Ipynb.Raw -> do
       -- we use ipynb to indicate no format given (a wildcard in nbformat)
-      let format = fromMaybe "ipynb" $ lookup "format" kvs
+      let format = fromMaybe "ipynb" $ lookup "raw_mimetype" kvs <|> lookup "format" kvs
       let format' =
             case format of
-              "text/html"       -> "html"
-              "text/latex"      -> "latex"
-              "application/pdf" -> "latex"
-              "text/markdown"   -> "markdown"
-              "text/x-rsrt"     -> "rst"
-              _                 -> format
-      return $ B.divWith ("",["cell","raw"],kvs) $ B.rawBlock format' source
+              "text/html"             -> "html"
+              "slides"                -> "html"
+              "text/latex"            -> "latex"
+              "application/pdf"       -> "latex"
+              "pdf"                   -> "latex"
+              "text/markdown"         -> "markdown"
+              "text/x-rst"            -> "rst"
+              "text/restructuredtext" -> "rst"
+              "text/asciidoc"         -> "asciidoc"
+              _                       -> format
+      return $ B.divWith (ident,["cell","raw"],kvs)
+             $ B.rawBlock format' source
     Ipynb.Code{ codeOutputs = outputs, codeExecutionCount = ec } -> do
       outputBlocks <- mconcat <$> mapM outputToBlock outputs
       let kvs' = maybe kvs (\x -> ("execution_count", tshow x):kvs) ec
-      return $ B.divWith ("",["cell","code"],kvs') $
+      return $ B.divWith (ident,["cell","code"],kvs') $
         B.codeBlockWith ("",[lang],[]) source
         <> outputBlocks
 
@@ -150,7 +165,7 @@ outputToBlock Err{ errName = ename,
 -- the output format.
 handleData :: PandocMonad m
            => JSONMeta -> MimeBundle -> m B.Blocks
-handleData metadata (MimeBundle mb) =
+handleData (JSONMeta metadata) (MimeBundle mb) =
   mconcat <$> mapM dataBlock (M.toList mb)
 
   where
@@ -186,6 +201,9 @@ handleData metadata (MimeBundle mb) =
     dataBlock ("text/latex", TextualData t)
       = return $ B.rawBlock "latex" t
 
+    dataBlock ("text/markdown", TextualData t)
+      = return $ B.rawBlock "markdown" t
+
     dataBlock ("text/plain", TextualData t) =
       return $ B.codeBlock t
 
@@ -195,7 +213,7 @@ handleData metadata (MimeBundle mb) =
     dataBlock _ = return mempty
 
 jsonMetaToMeta :: JSONMeta -> M.Map Text MetaValue
-jsonMetaToMeta = M.map valueToMetaValue
+jsonMetaToMeta (JSONMeta m) = M.map valueToMetaValue m
   where
     valueToMetaValue :: Value -> MetaValue
     valueToMetaValue x@Object{} =
@@ -214,11 +232,11 @@ jsonMetaToMeta = M.map valueToMetaValue
     valueToMetaValue Aeson.Null = MetaString ""
 
 jsonMetaToPairs :: JSONMeta -> [(Text, Text)]
-jsonMetaToPairs = M.toList . M.map
+jsonMetaToPairs (JSONMeta m) = M.toList . M.map
   (\case
       String t
         | not (T.all isDigit t)
         , t /= "true"
         , t /= "false"
                  -> t
-      x          -> T.pack $ UTF8.toStringLazy $ Aeson.encode x)
+      x          -> T.pack $ UTF8.toStringLazy $ Aeson.encode x) $ m

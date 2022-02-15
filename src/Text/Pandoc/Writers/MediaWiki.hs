@@ -1,8 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.MediaWiki
-   Copyright   : Copyright (C) 2008-2020 John MacFarlane
+   Copyright   : Copyright (C) 2008-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -91,8 +90,7 @@ blockToMediaWiki (Div attrs bs) = do
 blockToMediaWiki (Plain inlines) =
   inlineListToMediaWiki inlines
 
--- title beginning with fig: indicates that the image is a figure
-blockToMediaWiki (Para [Image attr txt (src,T.stripPrefix "fig:" -> Just tit)]) = do
+blockToMediaWiki (SimpleFigure attr txt (src, tit)) = do
   capt <- inlineListToMediaWiki txt
   img  <- imageToMediaWiki attr
   let opt = if T.null tit
@@ -130,20 +128,32 @@ blockToMediaWiki b@(RawBlock f str)
 
 blockToMediaWiki HorizontalRule = return "\n-----\n"
 
-blockToMediaWiki (Header level _ inlines) = do
+blockToMediaWiki (Header level (ident,_,_) inlines) = do
+  let autoId = T.replace " " "_" $ stringify inlines
   contents <- inlineListToMediaWiki inlines
   let eqs = T.replicate level "="
-  return $ eqs <> " " <> contents <> " " <> eqs <> "\n"
+  return $
+    (if T.null ident || autoId == ident
+        then ""
+        else "<span id=\"" <> ident <> "\"></span>\n")
+    <> eqs <> " " <> contents <> " " <> eqs <> "\n"
 
-blockToMediaWiki (CodeBlock (_,classes,_) str) = do
+blockToMediaWiki (CodeBlock (_,classes,keyvals) str) = do
   let at  = Set.fromList classes `Set.intersection` highlightingLangs
+  let numberLines = any (`elem` ["number","numberLines", "number-lines"])
+                    classes
+  let start = lookup "startFrom" keyvals
   return $
     case Set.toList at of
        [] -> "<pre" <> (if null classes
                            then ">"
                            else " class=\"" <> T.unwords classes <> "\">") <>
              escapeText str <> "</pre>"
-       (l:_) -> "<source lang=\"" <> l <> "\">" <> str <> "</source>"
+       (l:_) -> "<syntaxhighlight lang=\"" <> l <> "\"" <>
+                (if numberLines then " line" else "") <>
+                maybe "" (\x -> " start=\"" <> x <> "\"") start <>
+                ">" <> str <>
+                "</syntaxhighlight>"
             -- note:  no escape!  even for <!
 
 blockToMediaWiki (BlockQuote blocks) = do
@@ -439,10 +449,13 @@ inlineToMediaWiki (Link _ txt (src, _)) = do
   case txt of
      [Str s] | isURI src && escapeURI s == src -> return src
      _  -> return $ if isURI src
-              then "[" <> src <> " " <> label <> "]"
-              else "[[" <> src' <> "|" <> label <> "]]"
-                     -- with leading / it's a link to a help page
-                     where src' = fromMaybe src $ T.stripPrefix "/" src
+       then "[" <> src <> " " <> label <> "]"
+       else
+         if src == label
+           then "[[" <> src' <> "]]"
+           else "[[" <> src' <> "|" <> label <> "]]"
+       -- with leading / it's a link to a help page
+       where src' = fromMaybe src $ T.stripPrefix "/" src
 
 inlineToMediaWiki (Image attr alt (source, tit)) = do
   img  <- imageToMediaWiki attr

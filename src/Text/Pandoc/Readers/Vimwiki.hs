@@ -74,23 +74,28 @@ import Text.Pandoc.Parsing (ParserState, ParserT, blanklines, emailAddress,
                             many1Till, orderedListMarker, readWithM,
                             registerHeader, spaceChar, stateMeta,
                             stateOptions, uri, manyTillChar, manyChar, textStr,
-                            many1Char, countChar, many1TillChar)
-import Text.Pandoc.Shared (crFilter, splitTextBy, stringify, stripFirstAndLast,
+                            many1Char, countChar, many1TillChar,
+                            alphaNum, anyChar, char, newline, noneOf, oneOf,
+                            space, spaces, string)
+import Text.Pandoc.Sources (ToSources(..), Sources)
+import Text.Pandoc.Shared (splitTextBy, stringify, stripFirstAndLast,
                            isURI, tshow)
-import Text.Parsec.Char (alphaNum, anyChar, char, newline, noneOf, oneOf, space,
-                         spaces, string)
 import Text.Parsec.Combinator (between, choice, eof, lookAhead, many1,
                                manyTill, notFollowedBy, option, skipMany1)
 import Text.Parsec.Prim (getState, many, try, updateState, (<|>))
 
-readVimwiki :: PandocMonad m => ReaderOptions -> Text -> m Pandoc
+readVimwiki :: (PandocMonad m, ToSources a)
+            => ReaderOptions
+            -> a
+            -> m Pandoc
 readVimwiki opts s = do
-  res <- readWithM parseVimwiki def{ stateOptions = opts } $ crFilter s
+  let sources = toSources s
+  res <- readWithM parseVimwiki def{ stateOptions = opts } sources
   case res of
        Left e       -> throwError e
        Right result -> return result
 
-type VwParser = ParserT Text ParserState
+type VwParser = ParserT Sources ParserState
 
 
 -- constants
@@ -211,7 +216,7 @@ definitionTerm1 = try $
 
 definitionTerm2 :: PandocMonad m => VwParser m Inlines
 definitionTerm2 = try $ trimInlines . mconcat <$> manyTill inline'
-  (try $lookAhead (defMarkerM >> notFollowedBy hasDefMarkerM))
+  (try $ lookAhead (defMarkerM >> notFollowedBy hasDefMarkerM))
 
 defMarkerM :: PandocMonad m => VwParser m Char
 defMarkerM = string "::" >> spaceChar
@@ -377,7 +382,7 @@ bulletListMarkers = "ul" <$ (char '*' <|> char '-')
 
 orderedListMarkers :: PandocMonad m => VwParser m Text
 orderedListMarkers =
-  ("ol" <$choice (orderedListMarker Decimal Period:(($OneParen) . orderedListMarker <$> [Decimal, LowerRoman, UpperRoman, LowerAlpha, UpperAlpha])))
+  ("ol" <$ choice (orderedListMarker Decimal Period:(($ OneParen) . orderedListMarker <$> [Decimal, LowerRoman, UpperRoman, LowerAlpha, UpperAlpha])))
     <|> ("ol" <$ char '#')
 
 --many need trimInlines

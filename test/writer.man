@@ -1,3 +1,17 @@
+.\" Define V font for inline verbatim, using C font in formats
+.\" that render this, and otherwise B font.
+.ie "\f[CB]x\f[]"x" \{\
+. ftr V B
+. ftr VI BI
+. ftr VB B
+. ftr VBI BI
+.\}
+.el \{\
+. ftr V CR
+. ftr VI CI
+. ftr VB CB
+. ftr VBI CBI
+.\}
 .TH "Pandoc Test Suite" "" "July 17, 2006" "" ""
 .hy
 .PP
@@ -487,8 +501,8 @@ So is \f[B]\f[BI]this\f[B]\f[R] word.
 .PP
 So is \f[B]\f[BI]this\f[B]\f[R] word.
 .PP
-This is code: \f[C]>\f[R], \f[C]$\f[R], \f[C]\[rs]\f[R], \f[C]\[rs]$\f[R],
-\f[C]<html>\f[R].
+This is code: \f[V]>\f[R], \f[V]$\f[R], \f[V]\[rs]\f[R], \f[V]\[rs]$\f[R],
+\f[V]<html>\f[R].
 .PP
 [STRIKEOUT:This is \f[I]strikeout\f[R].]
 .PP
@@ -496,8 +510,8 @@ Superscripts: a^bc^d a^\f[I]hello\f[R]^ a^hello\ there^.
 .PP
 Subscripts: H~2~O, H~23~O, H~many\ of\ them~O.
 .PP
-These should not be superscripts or subscripts, because of the unescaped
-spaces: a\[ha]b c\[ha]d, a\[ti]b c\[ti]d.
+These should not be superscripts or subscripts, because of the unescaped spaces:
+a\[ha]b c\[ha]d, a\[ti]b c\[ti]d.
 .PP
    *   *   *   *   *
 .SH Smart quotes, ellipses, dashes
@@ -512,7 +526,7 @@ So is `pine.'
 .PP
 `He said, \[lq]I want to go.\[rq]' Were you alive in the 70\[cq]s?
 .PP
-Here is some quoted `\f[C]code\f[R]' and a \[lq]quoted
+Here is some quoted `\f[V]code\f[R]' and a \[lq]quoted
 link (http://example.com/?foo=1&bar=2)\[rq].
 .PP
 Some dashes: one\[em]two \[em] three\[em]four \[em] five.
@@ -545,7 +559,7 @@ Here\[cq]s one that has a line break in it:
 .PP
 These shouldn\[cq]t be math:
 .IP \[bu] 2
-To get the famous equation, write \f[C]$e = mc\[ha]2$\f[R].
+To get the famous equation, write \f[V]$e = mc\[ha]2$\f[R].
 .IP \[bu] 2
 $22,000 is a \f[I]lot\f[R] of money.
 So is $34,000.
@@ -553,7 +567,7 @@ So is $34,000.
 .IP \[bu] 2
 Shoes ($20) and socks ($5).
 .IP \[bu] 2
-Escaped \f[C]$\f[R]: $73 \f[I]this should be emphasized\f[R] 23$.
+Escaped \f[V]$\f[R]: $73 \f[I]this should be emphasized\f[R] 23$.
 .PP
 Here\[cq]s a LaTeX table:
 .PP
@@ -686,7 +700,7 @@ An e-mail address: <nobody@nowhere.net>
 Blockquoted: <http://example.com/>
 .RE
 .PP
-Auto-links should not occur here: \f[C]<http://example.com/>\f[R]
+Auto-links should not occur here: \f[V]<http://example.com/>\f[R]
 .IP
 .nf
 \f[C]
@@ -706,9 +720,9 @@ Here is a movie [IMAGE: movie] icon.
    *   *   *   *   *
 .SH Footnotes
 .PP
-Here is a footnote reference,[1] and another.[2] This should \f[I]not\f[R] be
-a footnote reference, because it contains a space.[\[ha]my note] Here is an
-inline note.[3]
+Here is a footnote reference,[1] and another.[2] This should \f[I]not\f[R] be a
+footnote reference, because it contains a space.[\[ha]my note] Here is an inline
+note.[3]
 .RS
 .PP
 Notes can go in quotes.[4]
@@ -728,8 +742,8 @@ It need not be placed at the end of the document.
 Here\[cq]s the long note.
 This one contains multiple blocks.
 .PP
-Subsequent blocks are indented to show that they belong to the footnote (as
-with list items).
+Subsequent blocks are indented to show that they belong to the footnote (as with
+list items).
 .IP
 .nf
 \f[C]
@@ -737,12 +751,12 @@ with list items).
 \f[R]
 .fi
 .PP
-If you want, you can indent every line, but you can also be lazy and just
-indent the first line of each block.
+If you want, you can indent every line, but you can also be lazy and just indent
+the first line of each block.
 .SS [3]
 .PP
 This is \f[I]easier\f[R] to type.
-Inline notes may contain links (http://google.com) and \f[C]]\f[R] verbatim
+Inline notes may contain links (http://google.com) and \f[V]]\f[R] verbatim
 characters, as well as [bracketed text].
 .SS [4]
 .PP

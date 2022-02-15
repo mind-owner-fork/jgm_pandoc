@@ -1,6 +1,7 @@
+{-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Lua.Module.Types
-   Copyright   : © 2019-2020 Albert Krewinkel
+   Copyright   : © 2019-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -9,60 +10,33 @@
 Pandoc data type constructors.
 -}
 module Text.Pandoc.Lua.Module.Types
-  ( pushModule
+  ( documentedModule
   ) where
 
-import Data.Version (Version)
-import Foreign.Lua (Lua, NumResults)
-import Text.Pandoc.Definition
-import Text.Pandoc.Lua.Marshaling.AST (LuaAttr, LuaListAttributes)
-import Text.Pandoc.Lua.Marshaling.Version ()
-import Text.Pandoc.Lua.Util (addFunction)
+import HsLua ( Module (..), (###), (<#>), (=#>)
+             , defun, functionResult, parameter)
+import HsLua.Module.Version (peekVersionFuzzy, pushVersion)
+import Text.Pandoc.Error (PandocError)
+import Text.Pandoc.Lua.ErrorConversion ()
 
-import qualified Foreign.Lua as Lua
-
--- | Push the pandoc.system module on the Lua stack.
-pushModule :: Lua NumResults
-pushModule = do
-  Lua.newtable
-  addFunction "Version" (return :: Version -> Lua Version)
-  pushCloneTable
-  Lua.setfield (Lua.nthFromTop 2) "clone"
-  return 1
-
-pushCloneTable :: Lua NumResults
-pushCloneTable = do
-  Lua.newtable
-  addFunction "Attr" cloneAttr
-  addFunction "Block" cloneBlock
-  addFunction "Citation" cloneCitation
-  addFunction "Inline" cloneInline
-  addFunction "Meta" cloneMeta
-  addFunction "MetaValue" cloneMetaValue
-  addFunction "ListAttributes" cloneListAttributes
-  addFunction "Pandoc" clonePandoc
-  return 1
-
-cloneAttr :: LuaAttr -> Lua LuaAttr
-cloneAttr = return
-
-cloneBlock :: Block -> Lua Block
-cloneBlock = return
-
-cloneCitation :: Citation -> Lua Citation
-cloneCitation = return
-
-cloneInline :: Inline -> Lua Inline
-cloneInline = return
-
-cloneListAttributes :: LuaListAttributes -> Lua LuaListAttributes
-cloneListAttributes = return
-
-cloneMeta :: Meta -> Lua Meta
-cloneMeta = return
-
-cloneMetaValue :: MetaValue -> Lua MetaValue
-cloneMetaValue = return
-
-clonePandoc :: Pandoc -> Lua Pandoc
-clonePandoc = return
+-- | Push the pandoc.types module on the Lua stack.
+documentedModule :: Module PandocError
+documentedModule = Module
+  { moduleName = "pandoc.types"
+  , moduleDescription =
+      "Constructors for types that are not part of the pandoc AST."
+  , moduleFields = []
+  , moduleFunctions =
+      [ defun "Version"
+        ### return
+        <#> parameter peekVersionFuzzy "string|integer|{integer,...}|Version"
+              "version_specifier"
+              (mconcat [ "either a version string like `'2.7.3'`, "
+                       , "a single integer like `2`, "
+                       , "list of integers like `{2,7,3}`, "
+                       , "or a Version object"
+                       ])
+        =#> functionResult pushVersion "Version" "A new Version object."
+      ]
+  , moduleOperations = []
+  }

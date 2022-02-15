@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Meta
-   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -27,13 +27,13 @@ import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Shared (blocksToInlines, safeRead)
+import Text.Pandoc.Network.HTTP (urlEncode)
 
 import Control.Monad (mzero, void)
 import Data.List (intercalate, intersperse)
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Network.HTTP (urlEncode)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -93,6 +93,8 @@ keywordHandlers = Map.fromList
   , "institute" ~~> lineOfInlines `parseThen` collectLines "institute"
   -- topic keywords
   , "keywords" ~~> lineOfInlines `parseThen` collectLines "keywords"
+  -- document language
+  , "language" ~~> fmap pure anyLine `parseThen` B.setMeta "lang"
   -- LaTeX-specific export settings
   , "latex_class" ~~> fmap pure anyLine `parseThen` B.setMeta "documentclass"
   , "latex_class_options" ~~>
@@ -186,7 +188,7 @@ parseFormat = try $ replacePlain <|> replaceUrl <|> justAppend
    -- inefficient
    replacePlain = try $ (\x -> T.concat . flip intersperse x)
                      <$> sequence [tillSpecifier 's', rest]
-   replaceUrl   = try $ (\x -> T.concat . flip intersperse x . T.pack . urlEncode . T.unpack)
+   replaceUrl   = try $ (\x -> T.concat . flip intersperse x . urlEncode)
                      <$> sequence [tillSpecifier 'h', rest]
    justAppend   = try $ (<>) <$> rest
 
@@ -237,7 +239,7 @@ lineOfInlines = do
 todoSequence :: Monad m => OrgParser m TodoSequence
 todoSequence = try $ do
   todoKws <- todoKeywords
-  doneKws <- optionMaybe $ todoDoneSep *> todoKeywords
+  doneKws <- optionMaybe $ todoDoneSep *> doneKeywords
   newline
   -- There must be at least one DONE keyword. The last TODO keyword is
   -- taken if necessary.
@@ -248,11 +250,17 @@ todoSequence = try $ do
                     (x:xs) -> return $ keywordsToSequence (reverse xs) [x]
 
  where
+   todoKeyword :: Monad m => OrgParser m Text
+   todoKeyword = many1Char nonspaceChar <* skipSpaces
+
    todoKeywords :: Monad m => OrgParser m [Text]
    todoKeywords = try $
-     let keyword = many1Char nonspaceChar <* skipSpaces
-         endOfKeywords = todoDoneSep <|> void newline
-     in manyTill keyword (lookAhead endOfKeywords)
+     let endOfKeywords = todoDoneSep <|> void newline
+     in manyTill todoKeyword (lookAhead endOfKeywords)
+
+   doneKeywords :: Monad m => OrgParser m [Text]
+   doneKeywords = try $
+     manyTill (todoKeyword <* optional todoDoneSep) (lookAhead newline)
 
    todoDoneSep :: Monad m => OrgParser m ()
    todoDoneSep = void . try $ skipSpaces *> char '|' <* skipSpaces1

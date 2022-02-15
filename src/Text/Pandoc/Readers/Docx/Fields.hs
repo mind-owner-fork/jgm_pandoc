@@ -21,8 +21,15 @@ import Text.Parsec
 import Text.Parsec.Text (Parser)
 
 type URL = T.Text
+type Anchor = T.Text
 
 data FieldInfo = HyperlinkField URL
+                -- The boolean indicates whether the field is a hyperlink.
+               | PagerefField Anchor Bool
+               | CslCitation T.Text
+               | CslBibliography
+               | EndNoteCite T.Text
+               | EndNoteRefList
                | UnknownField
                deriving (Show)
 
@@ -33,7 +40,43 @@ fieldInfo :: Parser FieldInfo
 fieldInfo =
   try (HyperlinkField <$> hyperlink)
   <|>
+  try ((uncurry PagerefField) <$> pageref)
+  <|>
+  try addIn
+  <|>
   return UnknownField
+
+addIn :: Parser FieldInfo
+addIn = do
+  spaces
+  string "ADDIN"
+  spaces
+  try cslCitation <|> cslBibliography <|> endnoteCite <|> endnoteRefList
+
+cslCitation :: Parser FieldInfo
+cslCitation = do
+  optional (string "ZOTERO_ITEM")
+  spaces
+  string "CSL_CITATION"
+  spaces
+  CslCitation <$> getInput
+
+cslBibliography :: Parser FieldInfo
+cslBibliography = do
+  string "ZOTERO_BIBL" <|> string "Mendeley Bibliography CSL_BIBLIOGRAPHY"
+  return CslBibliography
+
+endnoteCite :: Parser FieldInfo
+endnoteCite = try $ do
+  string "EN.CITE"
+  spaces
+  EndNoteCite <$> getInput
+
+endnoteRefList :: Parser FieldInfo
+endnoteRefList = try $ do
+  string "EN.REFLIST"
+  return EndNoteRefList
+
 
 escapedQuote :: Parser T.Text
 escapedQuote = string "\\\"" $> "\\\""
@@ -72,3 +115,23 @@ hyperlink = do
               ("\\l", s) : _ -> farg <> "#" <> s
               _              -> farg
   return url
+
+-- See §17.16.5.45
+pagerefSwitch :: Parser (T.Text, T.Text)
+pagerefSwitch = do
+  sw <- string "\\h"
+  spaces
+  farg <- fieldArgument
+  return (T.pack sw, farg)
+
+pageref :: Parser (Anchor, Bool)
+pageref = do
+  many space
+  string "PAGEREF"
+  spaces
+  farg <- fieldArgument
+  switches <- spaces *> many pagerefSwitch
+  let isLink = case switches of
+              ("\\h", _) : _ -> True 
+              _              -> False
+  return (farg, isLink)

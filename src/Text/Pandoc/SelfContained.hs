@@ -2,7 +2,7 @@
 {-# LANGUAGE TupleSections     #-}
 {- |
    Module      : Text.Pandoc.SelfContained
-   Copyright   : Copyright (C) 2011-2020 John MacFarlane
+   Copyright   : Copyright (C) 2011-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,7 +16,6 @@ the HTML using data URIs.
 module Text.Pandoc.SelfContained ( makeDataURI, makeSelfContained ) where
 import Codec.Compression.GZip as Gzip
 import Control.Applicative ((<|>))
-import Control.Monad.Except (throwError)
 import Control.Monad.Trans (lift)
 import Data.ByteString (ByteString)
 import Data.ByteString.Base64
@@ -29,12 +28,13 @@ import System.FilePath (takeDirectory, takeExtension, (</>))
 import Text.HTML.TagSoup
 import Text.Pandoc.Class.PandocMonad (PandocMonad (..), fetchItem,
                                       getInputFiles, report, setInputFiles)
-import Text.Pandoc.Error
 import Text.Pandoc.Logging
+import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.MIME (MimeType)
-import Text.Pandoc.Shared (isURI, renderTags', trim)
+import Text.Pandoc.Shared (isURI, renderTags', trim, tshow)
 import Text.Pandoc.UTF8 (toString, toText, fromText)
 import Text.Parsec (ParsecT, runParserT)
+import Control.Monad.Except (throwError, catchError)
 import qualified Text.Parsec as P
 
 isOk :: Char -> Bool
@@ -50,24 +50,19 @@ makeDataURI (mime, raw) =
                    then mime <> ";charset=utf-8"
                    else mime  -- mime type already has charset
 
+isSourceAttribute :: T.Text -> (T.Text, T.Text) -> Bool
+isSourceAttribute tagname (x,_) =
+  x == "src" ||
+  x == "data-src" ||
+  (x == "href" && tagname == "link") ||
+  x == "poster" ||
+  x == "data-background-image"
+
 convertTags :: PandocMonad m => [Tag T.Text] -> m [Tag T.Text]
 convertTags [] = return []
 convertTags (t@TagOpen{}:ts)
   | fromAttrib "data-external" t == "1" = (t:) <$> convertTags ts
-convertTags (t@(TagOpen tagname as):ts)
-  | tagname `elem`
-     ["img", "embed", "video", "input", "audio", "source", "track",
-      "section"] = do
-       as' <- mapM processAttribute as
-       rest <- convertTags ts
-       return $ TagOpen tagname as' : rest
-  where processAttribute (x,y) =
-           if x `elem` ["src", "data-src", "href", "poster", "data-background-image"]
-              then do
-                enc <- getDataURI (fromAttrib "type" t) y
-                return (x, enc)
-              else return (x,y)
-convertTags (t@(TagOpen "script" as):TagClose "script":ts) =
+convertTags (t@(TagOpen "script" as):tc@(TagClose "script"):ts) =
   case fromAttrib "src" t of
        ""  -> (t:) <$> convertTags ts
        src -> do
@@ -75,10 +70,10 @@ convertTags (t@(TagOpen "script" as):TagClose "script":ts) =
            res <- getData typeAttr src
            rest <- convertTags ts
            case res of
-                Left dataUri -> return $ TagOpen "script"
+                AlreadyDataURI dataUri -> return $ TagOpen "script"
                      (("src",dataUri) : [(x,y) | (x,y) <- as, x /= "src"]) :
                      TagClose "script" : rest
-                Right (mime, bs)
+                Fetched (mime, bs)
                   | ("text/javascript" `T.isPrefixOf` mime ||
                      "application/javascript" `T.isPrefixOf` mime ||
                      "application/x-javascript" `T.isPrefixOf` mime) &&
@@ -93,18 +88,19 @@ convertTags (t@(TagOpen "script" as):TagClose "script":ts) =
                          (("src",makeDataURI (mime, bs)) :
                           [(x,y) | (x,y) <- as, x /= "src"]) :
                         TagClose "script" : rest
+                CouldNotFetch _ -> return $ t:tc:rest
 convertTags (t@(TagOpen "link" as):ts) =
   case fromAttrib "href" t of
        ""  -> (t:) <$> convertTags ts
        src -> do
            res <- getData (fromAttrib "type" t) src
            case res of
-                Left dataUri -> do
+                AlreadyDataURI dataUri -> do
                   rest <- convertTags ts
                   return $ TagOpen "link"
                      (("href",dataUri) : [(x,y) | (x,y) <- as, x /= "href"]) :
                      rest
-                Right (mime, bs)
+                Fetched (mime, bs)
                   | "text/css" `T.isPrefixOf` mime
                     && T.null (fromAttrib "media" t)
                     && not ("</" `B.isInfixOf` bs) -> do
@@ -120,6 +116,25 @@ convertTags (t@(TagOpen "link" as):ts) =
                       return $ TagOpen "link"
                        (("href",makeDataURI (mime, bs)) :
                          [(x,y) | (x,y) <- as, x /= "href"]) : rest
+                CouldNotFetch _ -> do
+                      rest <- convertTags ts
+                      return $ t:rest
+convertTags (t@(TagOpen tagname as):ts)
+  | any (isSourceAttribute tagname) as
+     = do
+       as' <- mapM processAttribute as
+       rest <- convertTags ts
+       return $ TagOpen tagname as' : rest
+  where processAttribute (x,y) =
+           if isSourceAttribute tagname (x,y)
+              then do
+                res <- getData (fromAttrib "type" t) y
+                case res of
+                  AlreadyDataURI enc -> return (x, enc)
+                  Fetched (mt,bs) -> return (x, makeDataURI (mt,bs))
+                  CouldNotFetch _ -> return (x, y)
+              else return (x,y)
+
 convertTags (t:ts) = (t:) <$> convertTags ts
 
 cssURLs :: PandocMonad m
@@ -208,8 +223,8 @@ handleCSSUrl d (url, fallback) =
       u ->  do let url' = if isURI (T.pack u) then T.pack u else T.pack (d </> u)
                res <- lift $ getData "" url'
                case res of
-                    Left uri -> return $ Left (fromText $ "url(" <> uri <> ")")
-                    Right (mt', raw) -> do
+                    AlreadyDataURI uri -> return $ Left (fromText $ "url(" <> uri <> ")")
+                    Fetched (mt', raw) -> do
                       -- note that the downloaded CSS may
                       -- itself contain url(...).
                       (mt, b) <- if "text/css" `T.isPrefixOf` mt'
@@ -218,30 +233,31 @@ handleCSSUrl d (url, fallback) =
                                     then ("text/css",) <$> cssURLs d raw
                                     else return (mt', raw)
                       return $ Right (mt, b)
+                    CouldNotFetch _ -> return $ Left fallback
 
-getDataURI :: PandocMonad m => MimeType -> T.Text -> m T.Text
-getDataURI mimetype src = do
-  res <- getData mimetype src
-  case res of
-       Left uri -> return uri
-       Right x  -> return $ makeDataURI x
+data GetDataResult =
+    AlreadyDataURI T.Text
+  | CouldNotFetch PandocError
+  | Fetched (MimeType, ByteString)
+  deriving (Show)
 
 getData :: PandocMonad m
         => MimeType -> T.Text
-        -> m (Either T.Text (MimeType, ByteString))
+        -> m GetDataResult
 getData mimetype src
-  | "data:" `T.isPrefixOf` src = return $ Left src -- already data: uri
-  | otherwise = do
+  | "data:" `T.isPrefixOf` src = return $ AlreadyDataURI src -- already data: uri
+  | otherwise = catchError fetcher handler
+ where
+   fetcher = do
       let ext = T.toLower $ T.pack $ takeExtension $ T.unpack src
       (raw, respMime) <- fetchItem src
       let raw' = if ext `elem` [".gz", ".svgz"]
                  then B.concat $ L.toChunks $ Gzip.decompress $ L.fromChunks [raw]
                  else raw
-      mime <- case (mimetype, respMime) of
-                ("",Nothing) -> throwError $ PandocSomeError
-                  $ "Could not determine mime type for `" <> src <> "'"
-                (x, Nothing) -> return x
-                (_, Just x ) -> return x
+      let mime = case (mimetype, respMime) of
+                  ("",Nothing) -> "application/octet-stream"
+                  (x, Nothing) -> x
+                  (_, Just x ) -> x
       result <- if "text/css" `T.isPrefixOf` mime
                 then do
                   oldInputs <- getInputFiles
@@ -250,7 +266,16 @@ getData mimetype src
                   setInputFiles oldInputs
                   return res
                else return raw'
-      return $ Right (mime, result)
+      return $ Fetched (mime, result)
+   handler e = case e of
+                 PandocResourceNotFound r -> do
+                   report $ CouldNotFetchResource r ""
+                   return $ CouldNotFetch e
+                 PandocHttpError u er -> do
+                   report $ CouldNotFetchResource u (tshow er)
+                   return $ CouldNotFetch e
+                 _ -> throwError e
+
 
 
 

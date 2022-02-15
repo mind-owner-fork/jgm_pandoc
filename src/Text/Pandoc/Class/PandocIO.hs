@@ -29,6 +29,7 @@ import Text.Pandoc.Class.PandocMonad
 import Text.Pandoc.Definition
 import Text.Pandoc.Error
 import qualified Text.Pandoc.Class.IO as IO
+import Control.Monad.Catch (MonadCatch, MonadMask, MonadThrow)
 
 -- | Evaluate a 'PandocIO' operation.
 runIO :: PandocIO a -> IO (Either PandocError a)
@@ -45,6 +46,9 @@ newtype PandocIO a = PandocIO {
              , Functor
              , Applicative
              , Monad
+             , MonadCatch
+             , MonadMask
+             , MonadThrow
              , MonadError PandocError
              )
 
@@ -58,6 +62,7 @@ instance PandocMonad PandocIO where
   openURL = IO.openURL
   readFileLazy = IO.readFileLazy
   readFileStrict = IO.readFileStrict
+  readStdinStrict = IO.readStdinStrict
 
   glob = IO.glob
   fileExists = IO.fileExists
@@ -70,5 +75,5 @@ instance PandocMonad PandocIO where
   logOutput = IO.logOutput
 
 -- | Extract media from the mediabag into a directory.
-extractMedia :: FilePath -> Pandoc -> PandocIO Pandoc
+extractMedia :: (PandocMonad m, MonadIO m) => FilePath -> Pandoc -> m Pandoc
 extractMedia = IO.extractMedia

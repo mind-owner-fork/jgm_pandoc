@@ -15,6 +15,7 @@ Haddock:  <http://www.haskell.org/haddock/doc/html/>
 -}
 module Text.Pandoc.Writers.Haddock (writeHaddock) where
 import Control.Monad.State.Strict
+import Data.Char (isAlphaNum)
 import Data.Default
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -28,7 +29,7 @@ import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Shared
 
 type Notes = [[Block]]
-data WriterState = WriterState { stNotes :: Notes }
+newtype WriterState = WriterState { stNotes :: Notes }
 instance Default WriterState
   where def = WriterState{ stNotes = [] }
 
@@ -71,8 +72,18 @@ notesToHaddock opts notes =
 
 -- | Escape special characters for Haddock.
 escapeString :: Text -> Text
-escapeString = escapeStringUsing haddockEscapes
-  where haddockEscapes = backslashEscapes "\\/'`\"@<"
+escapeString t
+  | T.all isAlphaNum t = t
+  | otherwise = T.concatMap escChar t
+ where
+  escChar '\\' = "\\\\"
+  escChar '/'  = "\\/"
+  escChar '\'' = "\\'"
+  escChar '`'  = "\\`"
+  escChar '"'  = "\\\""
+  escChar '@'  = "\\@"
+  escChar '<'  = "\\<"
+  escChar c    = T.singleton c
 
 -- | Convert Pandoc block element to haddock.
 blockToHaddock :: PandocMonad m
@@ -87,8 +98,7 @@ blockToHaddock opts (Plain inlines) = do
   contents <- inlineListToHaddock opts inlines
   return $ contents <> cr
 -- title beginning with fig: indicates figure
-blockToHaddock opts (Para [Image attr alt (src,tgt)])
-  | Just tit <- T.stripPrefix "fig:" tgt
+blockToHaddock opts (SimpleFigure attr alt (src, tit))
   = blockToHaddock opts (Para [Image attr alt (src,tit)])
 blockToHaddock opts (Para inlines) =
   -- TODO:  if it contains linebreaks, we need to use a @...@ block

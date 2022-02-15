@@ -1,6 +1,6 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {- |
    Module      : Tests.Readers.DokuWiki
    Copyright   : © 2018-2020 Alexander Krotov
@@ -14,7 +14,6 @@ Tests for DokuWiki reader.
 -}
 module Tests.Readers.DokuWiki (tests) where
 
-import Prelude
 import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Tasty
@@ -302,6 +301,17 @@ tests = [ testGroup "inlines"
                     , "| bat | baz |"
                     ] =?>
           simpleTable [plain "foo", plain "bar"] [[plain "bat", plain "baz"]]
+        , "Table with alignment" =:
+          T.unlines [ "^ 0  ^  1  ^  2 ^ 3 ^"
+                    , "| a  | b   | c  |d  |"
+                    ] =?>
+          table emptyCaption 
+                (map (, ColWidthDefault) [AlignLeft, AlignCenter, AlignRight, AlignDefault])  
+                (TableHead nullAttr 
+                          [Row nullAttr . map (simpleCell . plain) $ ["0", "1", "2", "3"]])
+                [TableBody nullAttr 0 []
+                          [Row nullAttr . map (simpleCell . plain) $ ["a", "b", "c", "d"]]]
+                (TableFoot nullAttr []) 
         , "Table with colspan" =:
           T.unlines [ "^ 0,0 ^ 0,1 ^ 0,2 ^"
                     , "| 1,0 | 1,1 ||"

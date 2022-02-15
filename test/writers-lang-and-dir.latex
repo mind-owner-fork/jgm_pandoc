@@ -3,12 +3,11 @@
 \PassOptionsToPackage{hyphens}{url}
 %
 \documentclass[
-  english,
 ]{article}
+\usepackage{amsmath,amssymb}
 \usepackage{lmodern}
-\usepackage{amssymb,amsmath}
-\usepackage{ifxetex,ifluatex}
-\ifnum 0\ifxetex 1\fi\ifluatex 1\fi=0 % if pdftex
+\usepackage{iftex}
+\ifPDFTeX
   \usepackage[T1]{fontenc}
   \usepackage[utf8]{inputenc}
   \usepackage{textcomp} % provide euro and other symbols
@@ -45,32 +44,24 @@
 \providecommand{\tightlist}{%
   \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 \setcounter{secnumdepth}{-\maxdimen} % remove section numbering
-\ifxetex
-  % Load polyglossia as late as possible: uses bidi with RTL langages (e.g. Hebrew, Arabic)
-  \usepackage{polyglossia}
-  \setmainlanguage[]{english}
-  \setotherlanguage[]{german}
-  \setotherlanguage[variant=british]{english}
-  \setotherlanguage[variant=swiss]{german}
-  \setotherlanguage[]{spanish}
-  \setotherlanguage[]{french}
+\ifLuaTeX
+\usepackage[bidi=basic]{babel}
 \else
-  \usepackage[shorthands=off,ngerman,british,nswissgerman,spanish,french,main=english]{babel}
-  \newcommand{\textgerman}[2][]{\foreignlanguage{ngerman}{#2}}
-  \newenvironment{german}[2][]{\begin{otherlanguage}{ngerman}}{\end{otherlanguage}}
-  \newcommand{\textenglish}[2][]{\foreignlanguage{british}{#2}}
-  \newenvironment{english}[2][]{\begin{otherlanguage}{british}}{\end{otherlanguage}}
-  \let\oritextspanish\textspanish
-  \AddBabelHook{spanish}{beforeextras}{\renewcommand{\textspanish}{\oritextspanish}}
-  \AddBabelHook{spanish}{afterextras}{\renewcommand{\textspanish}[2][]{\foreignlanguage{spanish}{##2}}}
-  \newcommand{\textfrench}[2][]{\foreignlanguage{french}{#2}}
-  \newenvironment{french}[2][]{\begin{otherlanguage}{french}}{\end{otherlanguage}}
+\usepackage[bidi=default]{babel}
 \fi
-\ifxetex
-  % Load bidi as late as possible as it modifies e.g. graphicx
-  \usepackage{bidi}
+\babelprovide[main,import]{english}
+\babelprovide[import]{ngerman}
+\babelprovide[import]{british}
+\babelprovide[import]{nswissgerman}
+\babelprovide[import]{spanish}
+\babelprovide[import]{french}
+% get rid of language-specific shorthands (see #6817):
+\let\LanguageShortHands\languageshorthands
+\def\languageshorthands#1{}
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
 \fi
-\ifnum 0\ifxetex 1\fi\ifluatex 1\fi=0 % if pdftex
+\ifPDFTeX
   \TeXXeTstate=1
   \newcommand{\RL}[1]{\beginR #1\endR}
   \newcommand{\LR}[1]{\beginL #1\endL}
@@ -117,18 +108,19 @@ word-that-includesa\LR{ltrspan}right?
 
 Some text and
 
-\begin{german}
+\begin{otherlanguage}{ngerman}
 
 German div contents
 
-\end{german}
+\end{otherlanguage}
 
 and more text.
 
-Next paragraph with a \textenglish[variant=british]{British span} and a
-word-that-includesa\textgerman[variant=swiss]{Swiss German span}right?
+Next paragraph with a \foreignlanguage{british}{British span} and a
+word-that-includesa\foreignlanguage{nswissgerman}{Swiss German
+span}right?
 
-Some \textspanish{Spanish text}.
+Some \foreignlanguage{spanish}{Spanish text}.
 
 \hypertarget{combined}{%
 \section{Combined}\label{combined}}
@@ -136,17 +128,17 @@ Some \textspanish{Spanish text}.
 Some text and
 
 \begin{RTL}
-\begin{french}
+\begin{otherlanguage}{french}
 
 French rtl div contents
 
-\end{french}
+\end{otherlanguage}
 \end{RTL}
 
 and more text.
 
-Next paragraph with a \LR{\textenglish[variant=british]{British ltr
-span}} and a word-that-includesa\LR{\textgerman[variant=swiss]{Swiss
-German ltr span}}right?
+Next paragraph with a \LR{\foreignlanguage{british}{British ltr span}}
+and a word-that-includesa\LR{\foreignlanguage{nswissgerman}{Swiss German
+ltr span}}right?
 
 \end{document}

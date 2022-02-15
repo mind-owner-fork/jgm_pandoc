@@ -2,7 +2,7 @@
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.RST
-   Copyright   : Copyright (C) 2006-2020 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,7 +16,8 @@ reStructuredText:  <http://docutils.sourceforge.net/rst.html>
 module Text.Pandoc.Writers.RST ( writeRST, flatten ) where
 import Control.Monad.State.Strict
 import Data.Char (isSpace)
-import Data.List (transpose, intersperse)
+import Data.List (transpose, intersperse, foldl')
+import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import Data.Text (Text)
@@ -31,6 +32,7 @@ import Text.Pandoc.Shared
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Walk
+import Safe (lastMay)
 
 type Refs = [([Inline], Target)]
 
@@ -143,9 +145,12 @@ pictToRST (label, (attr, src, _, mbtarget)) = do
   let (_, cls, _) = attr
       classes = case cls of
                    []               -> empty
-                   ["align-right"]  -> ":align: right"
-                   ["align-left"]   -> ":align: left"
-                   ["align-center"] -> ":align: center"
+                   ["align-top"]    -> ":align: top"
+                   ["align-middle"] -> ":align: middle"
+                   ["align-bottom"] -> ":align: bottom"
+                   ["align-center"] -> empty
+                   ["align-right"]  -> empty
+                   ["align-left"]   -> empty
                    _                -> ":class: " <> literal (T.unwords cls)
   return $ nowrap
          $ ".. |" <> label' <> "| image:: " <> literal src $$ hang 3 empty (classes $$ dims)
@@ -215,19 +220,34 @@ blockToRST (Div (ident,classes,_kvs) bs) = do
            nest 3 contents $$
            blankline
 blockToRST (Plain inlines) = inlineListToRST inlines
--- title beginning with fig: indicates that the image is a figure
-blockToRST (Para [Image attr txt (src,T.stripPrefix "fig:" -> Just tit)]) = do
-  capt <- inlineListToRST txt
+blockToRST (SimpleFigure attr txt (src, tit)) = do
+  description <- inlineListToRST txt
   dims <- imageDimsToRST attr
   let fig = "figure:: " <> literal src
-      alt = ":alt: " <> if T.null tit then capt else literal tit
+      alt = ":alt: " <> if T.null tit then description else literal tit
+      capt = description
       (_,cls,_) = attr
       classes = case cls of
                    []               -> empty
                    ["align-right"]  -> ":align: right"
                    ["align-left"]   -> ":align: left"
                    ["align-center"] -> ":align: center"
-                   _                -> ":figclass: " <> literal (T.unwords cls)
+                   _ -> ":figclass: " <> literal (T.unwords cls)
+  return $ hang 3 ".. " (fig $$ alt $$ classes $$ dims $+$ capt) $$ blankline
+blockToRST (Para [Image attr txt (src, _)]) = do
+  description <- inlineListToRST txt
+  dims <- imageDimsToRST attr
+  let fig = "image:: " <> literal src
+      alt | null txt = empty
+          | otherwise = ":alt: " <> description
+      capt = empty
+      (_,cls,_) = attr
+      classes = case cls of
+                   []               -> empty
+                   ["align-right"]  -> ":align: right"
+                   ["align-left"]   -> ":align: left"
+                   ["align-center"] -> ":align: center"
+                   _ -> ":class: " <> literal (T.unwords cls)
   return $ hang 3 ".. " (fig $$ alt $$ classes $$ dims $+$ capt) $$ blankline
 blockToRST (Para inlines)
   | LineBreak `elem` inlines =
@@ -257,7 +277,12 @@ blockToRST (Header level (name,classes,_) inlines) = do
           let headerChar = if level > 5 then ' ' else "=-~^'" !! (level - 1)
           let border = literal $ T.replicate (offset contents) $ T.singleton headerChar
           let anchor | T.null name || name == autoId = empty
-                     | otherwise = ".. _" <> literal name <> ":" $$ blankline
+                     | otherwise = ".. _" <>
+                                   (if T.any (==':') name ||
+                                        T.take 1 name == "_"
+                                       then "`" <> literal name <> "`"
+                                       else literal name) <>
+                                   ":" $$ blankline
           return $ nowrap $ anchor $$ contents $$ border $$ blankline
     else do
           let rub     = "rubric:: " <> contents
@@ -323,7 +348,7 @@ blockToRST (OrderedList (start, style', delim) items) = do
                    then replicate (length items) "#."
                    else take (length items) $ orderedListMarkers
                                               (start, style', delim)
-  let maxMarkerLength = maximum $ map T.length markers
+  let maxMarkerLength = maybe 0 maximum $ NE.nonEmpty $ map T.length markers
   let markers' = map (\m -> let s = maxMarkerLength - T.length m
                             in  m <> T.replicate s " ") markers
   contents <- zipWithM orderedListItemToRST markers' items
@@ -341,7 +366,7 @@ bulletListItemToRST :: PandocMonad m => [Block] -> RST m (Doc Text)
 bulletListItemToRST items = do
   contents <- blockListToRST items
   return $ hang 3 "-  " contents $$
-      if endsWithPlain items
+      if null items || (endsWithPlain items && not (endsWithList items))
          then cr
          else blankline
 
@@ -354,9 +379,15 @@ orderedListItemToRST marker items = do
   contents <- blockListToRST items
   let marker' = marker <> " "
   return $ hang (T.length marker') (literal marker') contents $$
-      if endsWithPlain items
+      if null items || (endsWithPlain items && not (endsWithList items))
          then cr
          else blankline
+
+endsWithList :: [Block] -> Bool
+endsWithList bs = case lastMay bs of
+                    Just (BulletList{}) -> True
+                    Just (OrderedList{}) -> True
+                    _ -> False
 
 -- | Convert definition list item (label, list of blocks) to RST.
 definitionListItemToRST :: PandocMonad m => ([Inline], [[Block]]) -> RST m (Doc Text)
@@ -389,7 +420,7 @@ blockListToRST' topLevel blocks = do
           toClose Header{}                 = False
           toClose LineBlock{}              = False
           toClose HorizontalRule           = False
-          toClose (Para [Image _ _ (_,t)]) = "fig:" `T.isPrefixOf` t
+          toClose SimpleFigure{}           = True
           toClose Para{}                   = False
           toClose _                        = True
           commentSep  = RawBlock "rst" "..\n\n"
@@ -497,7 +528,7 @@ flatten outer
   | null contents = [outer]
   | otherwise     = combineAll contents
   where contents = dropInlineParent outer
-        combineAll = foldl combine []
+        combineAll = foldl' combine []
 
         combine :: [Inline] -> Inline -> [Inline]
         combine f i =
@@ -507,8 +538,8 @@ flatten outer
           (Quoted _ _, _)          -> keep f i
           (_, Quoted _ _)          -> keep f i
           -- spans are not rendered using RST inlines, so we can keep them
-          (Span ("",[],[]) _, _)   -> keep f i
-          (_, Span ("",[],[]) _)   -> keep f i
+          (Span (_,_,[]) _, _)   -> keep f i
+          (_, Span (_,_,[]) _)   -> keep f i
           -- inlineToRST handles this case properly so it's safe to keep
           ( Link{}, Image{})       -> keep f i
           -- parent inlines would prevent links from being correctly
@@ -525,11 +556,15 @@ flatten outer
         collapse f i = appendToLast f $ dropInlineParent i
 
         appendToLast :: [Inline] -> [Inline] -> [Inline]
-        appendToLast [] toAppend = [setInlineChildren outer toAppend]
-        appendToLast flattened toAppend
-          | isOuter lastFlat = init flattened <> [appendTo lastFlat toAppend]
-          | otherwise =  flattened <> [setInlineChildren outer toAppend]
-          where lastFlat = last flattened
+        appendToLast flattened toAppend =
+          case NE.nonEmpty flattened of
+            Nothing -> [setInlineChildren outer toAppend]
+            Just xs ->
+              if isOuter lastFlat
+                 then NE.init xs <> [appendTo lastFlat toAppend]
+                 else flattened <> [setInlineChildren outer toAppend]
+               where
+                lastFlat = NE.last xs
                 appendTo o i = mapNested (<> i) o
                 isOuter i = emptyParent i == emptyParent outer
                 emptyParent i = setInlineChildren i []
@@ -749,8 +784,7 @@ simpleTable opts blocksToDoc headers rows = do
                    then return []
                    else fixEmpties <$> mapM (blocksToDoc opts) headers
   rowDocs <- mapM (fmap fixEmpties . mapM (blocksToDoc opts)) rows
-  let numChars [] = 0
-      numChars xs = maximum . map offset $ xs
+  let numChars = maybe 0 maximum . NE.nonEmpty . map offset
   let colWidths = map numChars $ transpose (headerDocs : rowDocs)
   let toRow = mconcat . intersperse (lblock 1 " ") . zipWith lblock colWidths
   let hline = nowrap $ hsep (map (\n -> literal (T.replicate n "=")) colWidths)

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.RTF
-   Copyright   : Copyright (C) 2006-2020 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,7 +16,7 @@ module Text.Pandoc.Writers.RTF ( writeRTF
 import Control.Monad.Except (catchError, throwError)
 import Control.Monad
 import qualified Data.ByteString as B
-import Data.Char (chr, isDigit, ord)
+import Data.Char (chr, isDigit, ord, isAlphaNum)
 import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -43,10 +43,11 @@ rtfEmbedImage opts x@(Image attr _ (src,_)) = catchError
   (do result <- P.fetchItem src
       case result of
            (imgdata, Just mime)
-             | mime == "image/jpeg" || mime == "image/png" -> do
+             | mime' <- T.takeWhile (/=';') mime
+             , mime' == "image/jpeg" || mime' == "image/png" -> do
              let bytes = map (T.pack . printf "%02x") $ B.unpack imgdata
              filetype <-
-                case mime of
+                case mime' of
                      "image/jpeg" -> return "\\jpegblip"
                      "image/png"  -> return "\\pngblip"
                      _            -> throwError $
@@ -64,7 +65,7 @@ rtfEmbedImage opts x@(Image attr _ (src,_)) = catchError
                         -- twip = 1/1440in = 1/20pt
                         where (xpx, ypx) = sizeInPixels sz
                               (xpt, ypt) = desiredSizeInPoints opts attr sz
-             let raw = "{\\pict" <> filetype <> sizeSpec <> "\\bin " <>
+             let raw = "{\\pict" <> filetype <> sizeSpec <> " " <>
                         T.concat bytes <> "}"
              if B.null imgdata
                 then do
@@ -104,13 +105,13 @@ writeRTF options doc = do
   toc <- blocksToRTF 0 AlignDefault [toTableOfContents options blocks]
   let context = defField "body" body
               $ defField "spacer" spacer
-              $(if writerTableOfContents options
-                   then defField "table-of-contents" toc
-                        -- for backwards compatibility,
-                        -- we populate toc with the contents
-                        -- of the toc rather than a boolean:
-                        . defField "toc" toc
-                   else id) metadata
+              $ (if writerTableOfContents options
+                    then defField "table-of-contents" toc
+                         -- for backwards compatibility,
+                         -- we populate toc with the contents
+                         -- of the toc rather than a boolean:
+                         . defField "toc" toc
+                    else id) metadata
   return $
     case writerTemplate options of
        Just tpl -> render Nothing $ renderTemplate tpl context
@@ -137,15 +138,21 @@ handleUnicode = T.concatMap $ \c ->
 
 -- | Escape special characters.
 escapeSpecial :: Text -> Text
-escapeSpecial = escapeStringUsing $
-  [ ('\t',"\\tab ")
-  , ('\8216',"\\u8216'")
-  , ('\8217',"\\u8217'")
-  , ('\8220',"\\u8220\"")
-  , ('\8221',"\\u8221\"")
-  , ('\8211',"\\u8211-")
-  , ('\8212',"\\u8212-")
-  ] <> backslashEscapes "{\\}"
+escapeSpecial t
+  | T.all isAlphaNum t = t
+  | otherwise          = T.concatMap escChar t
+ where
+  escChar '\t' = "\\tab "
+  escChar '\8216' = "\\u8216'"
+  escChar '\8217' = "\\u8217'"
+  escChar '\8220' = "\\u8220\""
+  escChar '\8221' = "\\u8221\""
+  escChar '\8211' = "\\u8211-"
+  escChar '\8212' = "\\u8212-"
+  escChar '{'     = "\\{"
+  escChar '}'     = "\\}"
+  escChar '\\'    = "\\\\"
+  escChar c       = T.singleton c
 
 -- | Escape strings as needed for rich text format.
 stringToRTF :: Text -> Text
@@ -241,19 +248,20 @@ blockToRTF _ _ b@(RawBlock f str)
   | otherwise         = do
       report $ BlockNotRendered b
       return ""
-blockToRTF indent alignment (BulletList lst) = (spaceAtEnd . T.concat) <$>
+blockToRTF indent alignment (BulletList lst) = spaceAtEnd . T.concat <$>
   mapM (listItemToRTF alignment indent (bulletMarker indent)) lst
 blockToRTF indent alignment (OrderedList attribs lst) =
-  (spaceAtEnd . T.concat) <$>
+  spaceAtEnd . T.concat <$>
    zipWithM (listItemToRTF alignment indent) (orderedMarkers indent attribs) lst
-blockToRTF indent alignment (DefinitionList lst) = (spaceAtEnd . T.concat) <$>
+blockToRTF indent alignment (DefinitionList lst) = spaceAtEnd . T.concat <$>
   mapM (definitionListItemToRTF alignment indent) lst
 blockToRTF indent _ HorizontalRule = return $
   rtfPar indent 0 AlignCenter "\\emdash\\emdash\\emdash\\emdash\\emdash"
 blockToRTF indent alignment (Header level _ lst) = do
   contents <- inlinesToRTF lst
   return $ rtfPar indent 0 alignment $
-             "\\b \\fs" <> tshow (40 - (level * 4)) <> " " <> contents
+             "\\outlinelevel" <> tshow (level - 1) <>
+             " \\b \\fs" <> tshow (40 - (level * 4)) <> " " <> contents
 blockToRTF indent alignment (Table _ blkCapt specs thead tbody tfoot) = do
   let (caption, aligns, sizes, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlinesToRTF caption

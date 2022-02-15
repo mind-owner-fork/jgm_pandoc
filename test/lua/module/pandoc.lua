@@ -8,125 +8,181 @@ function os_is_windows ()
   return package.config:sub(1,1) == '\\'
 end
 
+-- Constructor behavior is tested in the hslua-pandoc-types module, so
+-- we just make sure the functions are present.
 return {
-  group 'Attr' {
-    group 'Constructor' {
-      test('returns null-Attr if no arguments are given', function ()
-        local attr = pandoc.Attr()
-        assert.are_equal(attr.identifier, '')
-        assert.are_same(attr.classes, {})
-        assert.are_same(attr.attributes, {})
+  group 'Constructors' {
+    group 'Misc' {
+      test('pandoc.Attr is a function', function ()
+        assert.are_equal(type(pandoc.Attr), 'function')
       end),
-      test(
-        'accepts string-indexed table or list of pairs as attributes',
-        function ()
-          local attributes_list = pandoc.List:new {{'one', '1'}, {'two', '2'}}
-          local attr_from_list = pandoc.Attr('', {}, attributes_list:clone())
-
-          assert.are_same(
-            pandoc.List:new(attr_from_list.attributes),
-            attributes_list
-          )
-
-          local attributes_table = {one = '1', two = '2'}
-          local attr_from_table = pandoc.Attr('', {}, attributes_table)
-
-          local assoc_list_from_table =
-            pandoc.List:new(attr_from_table.attributes)
-          -- won't work in general, but does in this special case
-          table.sort(assoc_list_from_table, function(x, y) return x[1]<y[1] end)
-          assert.are_same(
-            assoc_list_from_table,
-            attributes_list
-          )
-        end
-      )
+      test('pandoc.AttributeList is a function', function ()
+        assert.are_equal(type(pandoc.AttributeList), 'function')
+      end),
+      test('pandoc.Blocks is a function', function ()
+        assert.are_equal(type(pandoc.Blocks), 'function')
+      end),
+      test('pandoc.Citation is a function', function ()
+        assert.are_equal(type(pandoc.Citation), 'function')
+      end),
+      test('pandoc.Inlines is a function', function ()
+        assert.are_equal(type(pandoc.Inlines), 'function')
+      end),
+      test('pandoc.SimpleTable is a function', function ()
+        assert.are_equal(type(pandoc.SimpleTable), 'function')
+      end),
+      test('pandoc.Meta is a function', function ()
+        assert.are_equal(type(pandoc.Meta), 'function')
+      end),
+      test('pandoc.Pandoc is a function', function ()
+        assert.are_equal(type(pandoc.Pandoc), 'function')
+      end),
     },
-    group 'AttributeList' {
-      test('allows access via fields', function ()
-        local attributes = pandoc.Attr('', {}, {{'a', '1'}, {'b', '2'}}).attributes
-        assert.are_equal(attributes.a, '1')
-        assert.are_equal(attributes.b, '2')
+    group "Inline elements" {
+      test('pandoc.AttributeList is a function', function ()
+        assert.are_equal(type(pandoc.Cite), 'function')
       end),
-      test('allows access to pairs via numerical indexing', function ()
-        local attributes = pandoc.Attr('', {}, {{'a', '1'}, {'b', '2'}}).attributes
-        assert.are_same(attributes[1], {'a', '1'})
-        assert.are_same(attributes[2], {'b', '2'})
+      test('pandoc.AttributeList is a function', function ()
+        assert.are_equal(type(pandoc.Code), 'function')
       end),
-      test('adds entries by field name', function ()
-        local attributes = pandoc.Attr('',{}, {{'c', '1'}, {'d', '2'}}).attributes
-        attributes.e = '3'
-        assert.are_same(
-          -- checking the full AttributeList would "duplicate" entries
-          setmetatable(attributes, nil),
-          {{'c', '1'}, {'d', '2'}, {'e', '3'}}
-        )
+      test('pandoc.Emph is a function', function ()
+        assert.are_equal(type(pandoc.Emph), 'function')
       end),
-      test('deletes entries by field name', function ()
-        local attributes = pandoc.Attr('',{}, {a = '1', b = '2'}).attributes
-        attributes.a = nil
-        assert.is_nil(attributes.a)
-        local assoc_list = setmetatable(attributes, nil)
-        assert.are_same(assoc_list, {{'b', '2'}})
+      test('pandoc.Image is a function', function ()
+        assert.are_equal(type(pandoc.Image), 'function')
       end),
-      test('remains unchanged if deleted key did not exist', function ()
-        local assoc_list = pandoc.List:new {{'alpha', 'x'}, {'beta', 'y'}}
-        local attributes = pandoc.Attr('', {}, assoc_list:clone()).attributes
-        attributes.a = nil
-        assert.are_same(pandoc.List:new(attributes), assoc_list)
+      test('pandoc.Link is a function', function ()
+        assert.are_equal(type(pandoc.Link), 'function')
       end),
-      test('gives key-value pairs when iterated-over', function ()
-        local attributes = {width = '11', height = '22', name = 'test'}
-        local attr = pandoc.Attr('', {}, attributes)
-        local count = 0
-        for k, v in pairs(attr.attributes) do
-          assert.are_equal(attributes[k], v)
-          count = count + 1
-        end
-        assert.are_equal(count, 3)
-      end)
+      test('pandoc.Math is a function', function ()
+        assert.are_equal(type(pandoc.Math), 'function')
+      end),
+      test('pandoc.Note is a function', function ()
+        assert.are_equal(type(pandoc.Note), 'function')
+      end),
+      test('pandoc.Quoted is a function', function ()
+        assert.are_equal(type(pandoc.Quoted), 'function')
+      end),
+      test('pandoc.SmallCaps is a function', function ()
+        assert.are_equal(type(pandoc.SmallCaps), 'function')
+      end),
+      test('pandoc.SoftBreak is a function', function ()
+        assert.are_equal(type(pandoc.SoftBreak), 'function')
+      end),
+      test('pandoc.Span is a function', function ()
+        assert.are_equal(type(pandoc.Span), 'function')
+      end),
+      test('pandoc.Str is a function', function ()
+        assert.are_equal(type(pandoc.Str), 'function')
+      end),
+      test('pandoc.Strikeout is a function', function ()
+      assert.are_equal(type(pandoc.Strikeout), 'function')
+      end),
+      test('pandoc.Strong is a function', function ()
+        assert.are_equal(type(pandoc.Strong), 'function')
+      end),
+      test('pandoc.Subscript is a function', function ()
+        assert.are_equal(type(pandoc.Subscript), 'function')
+      end),
+      test('pandoc.Superscript is a function', function ()
+        assert.are_equal(type(pandoc.Superscript), 'function')
+      end),
+      test('pandoc.Underline is a function', function ()
+        assert.are_equal(type(pandoc.Underline), 'function')
+      end),
     },
-    group 'HTML-like attribute tables' {
-      test('in element constructor', function ()
-        local html_attributes = {
-          id = 'the-id',
-          class = 'class1 class2',
-          width = '11',
-          height = '12'
-        }
-        local attr = pandoc.Span('test', html_attributes).attr
-        assert.are_equal(attr.identifier, 'the-id')
-        assert.are_equal(attr.classes[1], 'class1')
-        assert.are_equal(attr.classes[2], 'class2')
-        assert.are_equal(attr.attributes.width, '11')
-        assert.are_equal(attr.attributes.height, '12')
+    group "Block elements" {
+      test('pandoc.BlockQuote is a function', function ()
+        assert.are_equal(type(pandoc.BlockQuote), 'function')
       end),
-      test('element attr setter', function ()
-        local html_attributes = {
-          id = 'the-id',
-          class = 'class1 class2',
-          width = "11",
-          height = "12"
-        }
-        local span = pandoc.Span 'test'
-        span.attr = html_attributes
-        assert.are_equal(span.attr.identifier, 'the-id')
-        assert.are_equal(span.attr.classes[1], 'class1')
-        assert.are_equal(span.attr.classes[2], 'class2')
-        assert.are_equal(span.attr.attributes.width, '11')
-        assert.are_equal(span.attr.attributes.height, '12')
+      test('pandoc.BulletList is a function', function ()
+        assert.are_equal(type(pandoc.BulletList), 'function')
       end),
-      test('element attrbutes setter', function ()
-        local attributes = {
-          width = "11",
-          height = "12"
-        }
-        local span = pandoc.Span 'test'
-        span.attributes = attributes
-        assert.are_equal(span.attr.attributes.width, '11')
-        assert.are_equal(span.attr.attributes.height, '12')
-      end)
+      test('pandoc.CodeBlock is a function', function ()
+        assert.are_equal(type(pandoc.CodeBlock), 'function')
+      end),
+      test('pandoc.DefinitionList is a function', function ()
+        assert.are_equal(type(pandoc.DefinitionList), 'function')
+      end),
+      test('pandoc.Div is a function', function ()
+        assert.are_equal(type(pandoc.Div), 'function')
+      end),
+      test('pandoc.Header is a function', function ()
+        assert.are_equal(type(pandoc.Header), 'function')
+      end),
+      test('pandoc.LineBlock is a function', function ()
+        assert.are_equal(type(pandoc.LineBlock), 'function')
+      end),
+      test('pandoc.Null is a function', function ()
+        assert.are_equal(type(pandoc.Null), 'function')
+      end),
+      test('pandoc.OrderedList is a function', function ()
+        assert.are_equal(type(pandoc.OrderedList), 'function')
+      end),
+      test('pandoc.Para is a function', function ()
+        assert.are_equal(type(pandoc.Para), 'function')
+      end),
+      test('pandoc.Plain is a function', function ()
+        assert.are_equal(type(pandoc.Plain), 'function')
+      end),
+      test('pandoc.RawBlock is a function', function ()
+        assert.are_equal(type(pandoc.Plain), 'function')
+      end),
+      test('pandoc.Table is a function', function ()
+        assert.are_equal(type(pandoc.Table), 'function')
+      end),
     }
+  },
+  group 'MetaValue elements' {
+    test('MetaList elements behave like lists', function ()
+      local metalist = pandoc.MetaList{}
+      assert.are_equal(type(metalist.insert), 'function')
+      assert.are_equal(type(metalist.remove), 'function')
+    end),
+    test('`tag` is an alias for `t``', function ()
+      assert.are_equal((pandoc.MetaList{}).tag, (pandoc.MetaList{}).t)
+      assert.are_equal((pandoc.MetaMap{}).tag, (pandoc.MetaMap{}).t)
+      assert.are_equal((pandoc.MetaInlines{}).tag, (pandoc.MetaInlines{}).t)
+      assert.are_equal((pandoc.MetaBlocks{}).tag, (pandoc.MetaBlocks{}).t)
+    end),
+  },
+  group 'Meta' {
+    test('inline list is treated as MetaInlines', function ()
+      local meta = pandoc.Pandoc({}, {test = {pandoc.Emph 'check'}}).meta
+      assert.are_same(meta.test, {pandoc.Emph{pandoc.Str 'check'}})
+    end),
+    test('inline element is treated as MetaInlines singleton', function ()
+      local meta = pandoc.Pandoc({}, {test = pandoc.Emph 'check'}).meta
+      assert.are_same(meta.test, {pandoc.Emph{pandoc.Str 'check'}})
+    end),
+    test('block list is treated as MetaBlocks', function ()
+      local meta = pandoc.Pandoc({}, {test = {pandoc.Plain 'check'}}).meta
+      assert.are_same(meta.test, {pandoc.Plain{pandoc.Str 'check'}})
+    end),
+    test('block element is treated as MetaBlocks singleton', function ()
+      local meta = pandoc.Pandoc({}, {test = pandoc.Plain 'check'}).meta
+      assert.are_same(meta.test, {pandoc.Plain{pandoc.Str 'check'}})
+    end),
+  },
+  group 'Other types' {
+    group 'ReaderOptions' {
+      test('returns a userdata value', function ()
+        local opts = pandoc.ReaderOptions {}
+        assert.are_equal(type(opts), 'userdata')
+      end),
+      test('can construct from table', function ()
+        local opts = pandoc.ReaderOptions {columns = 66}
+        assert.are_equal(opts.columns, 66)
+      end),
+      test('can construct from other ReaderOptions value', function ()
+        local orig = pandoc.ReaderOptions{columns = 65}
+        local copy = pandoc.ReaderOptions(orig)
+        for k, v in pairs(orig) do
+          assert.are_same(copy[k], v)
+        end
+        assert.are_equal(copy.columns, 65)
+      end),
+    },
   },
 
   group 'clone' {
@@ -163,6 +219,8 @@ return {
       local cloned = cite:clone()
       cite.id = 'newton'
       assert.are_same(cloned.id, 'leibniz')
+      assert.are_same(cite.id, 'newton')
+      assert.are_same(cite.mode, cloned.mode)
     end),
   },
 
@@ -204,6 +262,30 @@ return {
           }
       })
       assert.are_same(expected, pandoc.read(valid_markdown))
+    end),
+    test('unsupported extension', function ()
+      assert.error_matches(
+        function () pandoc.read('foo', 'gfm+empty_paragraphs') end,
+        'Extension empty_paragraphs not supported for gfm'
+      )
+    end),
+    test('read with other indented code classes', function()
+      local indented_code = '    return true'
+      local expected = pandoc.Pandoc({
+          pandoc.CodeBlock('return true', {class='foo'})
+      })
+      assert.are_same(
+        expected,
+        pandoc.read(indented_code, 'markdown', {indented_code_classes={'foo'}})
+      )
+    end),
+    test('can read epub', function ()
+      local epub = io.open('lua/module/tiny.epub', 'rb')
+      local blocks = pandoc.read(epub:read'a', 'epub').blocks
+      assert.are_equal(
+        blocks[#blocks],
+        pandoc.Para { pandoc.Emph 'EPUB' }
+      )
     end),
     test('failing read', function ()
       assert.error_matches(
@@ -249,5 +331,26 @@ return {
       )
       assert.are_equal('1234', table.concat(acc))
     end)
+  },
+
+  group 'Marshal' {
+    group 'Inlines' {
+      test('Strings are broken into words', function ()
+        assert.are_equal(
+          pandoc.Emph 'Nice, init?',
+          pandoc.Emph{pandoc.Str 'Nice,', pandoc.Space(), pandoc.Str 'init?'}
+        )
+      end)
+    },
+    group 'Blocks' {
+      test('Strings are broken into words and wrapped in Plain', function ()
+        assert.are_equal(
+          pandoc.Div{
+            pandoc.Plain{pandoc.Str 'Nice,', pandoc.Space(), pandoc.Str 'init?'}
+          },
+          pandoc.Div{'Nice, init?'}
+        )
+      end)
+    }
   }
 }

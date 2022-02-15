@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.ParserState
-   Copyright   : Copyright (C) 2014-2020 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -122,7 +122,7 @@ data OrgParserState = OrgParserState
   , orgMacros                    :: M.Map Text Macro
   }
 
-data OrgParserLocal = OrgParserLocal
+newtype OrgParserLocal = OrgParserLocal
   { orgLocalQuoteContext :: QuoteContext
   }
 

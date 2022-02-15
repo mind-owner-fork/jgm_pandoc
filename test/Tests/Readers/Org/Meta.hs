@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Meta
-   Copyright   : © 2014-2020 Albert Krewinkel
+   Copyright   : © 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -13,7 +12,6 @@ Tests parsing of org meta data (mostly lines starting with @#+@).
 -}
 module Tests.Readers.Org.Meta (tests) where
 
-import Prelude
 import Test.Tasty (TestTree, testGroup)
 import Tests.Helpers ((=?>))
 import Tests.Readers.Org.Shared ((=:), spcSep)
@@ -44,7 +42,7 @@ tests =
 
   , testGroup "Export settings"
     [ "Title" =:
-      "#+TITLE: Hello, World" =?>
+      "#+title: Hello, World" =?>
       let titleInline = toList $ "Hello," <> space <> "World"
           meta = setMeta "title" (MetaInlines titleInline) nullMeta
       in Pandoc meta mempty
@@ -69,21 +67,21 @@ tests =
       ]
 
     , "Date" =:
-      "#+Date: Feb. *28*, 2014" =?>
+      "#+date: Feb. *28*, 2014" =?>
       let date = toList . spcSep $ [ "Feb.", strong "28" <> ",", "2014" ]
           meta = setMeta "date" (MetaInlines date) nullMeta
       in Pandoc meta mempty
 
     , testGroup "Description"
       [ "Single line" =:
-        "#+DESCRIPTION: Explanatory text" =?>
+        "#+description: Explanatory text" =?>
         let description = [Str "Explanatory", Space, Str "text"]
             meta = setMeta "description" (MetaInlines description) nullMeta
         in Pandoc meta mempty
 
       , "Multiline" =:
-        T.unlines [ "#+DESCRIPTION: /Short/ introduction"
-                  , "#+DESCRIPTION: to Org-mode"
+        T.unlines [ "#+description: /Short/ introduction"
+                  , "#+description: to Org-mode"
                   ] =?>
         let description = [ Emph [Str "Short"], Space, Str "introduction"
                           , SoftBreak
@@ -94,54 +92,68 @@ tests =
       ]
 
     , "Subtitle" =:
-      T.unlines [ "#+SUBTITLE: Your Life in"
-                , "#+SUBTITLE: /Plain/ Text"
+      T.unlines [ "#+subtitle: Your Life in"
+                , "#+subtitle: /Plain/ Text"
                 ] =?>
       let subtitle = "Your Life in" <> softbreak <> emph "Plain" <> " Text"
       in Pandoc (setMeta "subtitle" (toMetaValue subtitle) nullMeta) mempty
 
     , "Keywords" =:
-      T.unlines [ "#+KEYWORDS: pandoc, testing,"
-                , "#+KEYWORDS: Org"
+      T.unlines [ "#+keywords: pandoc, testing,"
+                , "#+keywords: Org"
                 ] =?>
       let keywords = toList $ "pandoc, testing," <> softbreak <> "Org"
           meta = setMeta "keywords" (MetaInlines keywords) nullMeta
       in Pandoc meta mempty
 
     , "Institute" =:
-      "#+INSTITUTE: ACME Inc." =?>
+      "#+institute: ACME Inc." =?>
       Pandoc (setMeta "institute" ("ACME Inc." :: Inlines) nullMeta) mempty
+
+    , "Document language" =:
+      "#+LANGUAGE: de-DE" =?>
+      Pandoc (setMeta "lang" (MetaString "de-DE") nullMeta) mempty
+
+    , testGroup "Todo sequences"
+      [ "not included in document" =:
+        "#+todo: WAITING | FINISHED" =?>
+        Pandoc mempty mempty
+
+      , "can contain multiple pipe characters" =:
+        "#+todo: UNFINISHED | RESEARCH | NOTES | CHART\n" =?>
+        Pandoc mempty mempty
+      ]
 
     , testGroup "LaTeX"
       [ "LATEX_HEADER" =:
-        "#+LaTeX_header: \\usepackage{tikz}" =?>
+        "#+latex_header: \\usepackage{tikz}" =?>
         let latexInlines = rawInline "latex" "\\usepackage{tikz}"
             inclList = MetaList [MetaInlines (toList latexInlines)]
             meta = setMeta "header-includes" inclList nullMeta
         in Pandoc meta mempty
 
       , "LATEX_HEADER_EXTRA" =:
-        "#+LATEX_HEADER_EXTRA: \\usepackage{calc}" =?>
+        "#+latex_header_extra: \\usepackage{calc}" =?>
         let latexInlines = rawInline "latex" "\\usepackage{calc}"
             inclList = toMetaValue [latexInlines]
         in Pandoc (setMeta "header-includes" inclList nullMeta) mempty
 
       , testGroup "LaTeX_CLASS"
         [ "stored as documentclass" =:
-          "#+LATEX_CLASS: article" =?>
+          "#+latex_class: article" =?>
           let meta = setMeta "documentclass" (MetaString "article") nullMeta
           in Pandoc meta mempty
 
         , "last definition takes precedence" =:
-          T.unlines [ "#+LATEX_CLASS: this will not be used"
-                    , "#+LATEX_CLASS: report"
+          T.unlines [ "#+latex_class: this will not be used"
+                    , "#+latex_class: report"
                     ] =?>
           let meta = setMeta "documentclass" (MetaString "report") nullMeta
           in Pandoc meta mempty
         ]
 
       , "LATEX_CLASS_OPTIONS as classoption" =:
-        "#+LATEX_CLASS_OPTIONS: [a4paper]" =?>
+        "#+latex_class_options: [a4paper]" =?>
         let meta = setMeta "classoption" (MetaString "a4paper") nullMeta
         in Pandoc meta mempty
       ]
@@ -155,8 +167,8 @@ tests =
         in Pandoc meta mempty
 
       , "HTML_HEAD_EXTRA behaves like HTML_HEAD" =:
-        T.unlines [ "#+HTML_HEAD: <meta name=\"generator\" content=\"pandoc\">"
-                  , "#+HTML_HEAD_EXTRA: <meta charset=\"utf-8\">"
+        T.unlines [ "#+html_head: <meta name=\"generator\" content=\"pandoc\">"
+                  , "#+html_head_extra: <meta charset=\"utf-8\">"
                   ] =?>
         let generator = rawInline "html"
                                   "<meta name=\"generator\" content=\"pandoc\">"
@@ -167,9 +179,9 @@ tests =
     ]
 
   , testGroup "Non-export keywords"
-    [ testGroup "#+LINK"
+    [ testGroup "#+link"
       [ "Link abbreviation" =:
-        T.unlines [ "#+LINK: wp https://en.wikipedia.org/wiki/%s"
+        T.unlines [ "#+link: wp https://en.wikipedia.org/wiki/%s"
                   , "[[wp:Org_mode][Wikipedia on Org-mode]]"
                   ] =?>
         para (link "https://en.wikipedia.org/wiki/Org_mode" ""
@@ -177,7 +189,7 @@ tests =
 
       , "Link abbreviation, defined after first use" =:
         T.unlines [ "[[zl:non-sense][Non-sense articles]]"
-                  , "#+LINK: zl http://zeitlens.com/tags/%s.html"
+                  , "#+link: zl http://zeitlens.com/tags/%s.html"
                   ] =?>
         para (link "http://zeitlens.com/tags/non-sense.html" ""
                ("Non-sense" <> space <> "articles"))
@@ -214,11 +226,11 @@ tests =
       ]
 
     , "Unknown keyword" =:
-      T.unlines [ "#+UNKNOWN_KEYWORD: Chumbawamba"
-                , "#+ANOTHER_UNKNOWN: Blur"
+      T.unlines [ "#+unknown_keyword: Chumbawamba"
+                , "#+another_unknown: Blur"
                 ] =?>
-      rawBlock "org" "#+UNKNOWN_KEYWORD: Chumbawamba" <>
-      rawBlock "org" "#+ANOTHER_UNKNOWN: Blur"
+      rawBlock "org" "#+unknown_keyword: Chumbawamba" <>
+      rawBlock "org" "#+another_unknown: Blur"
     ]
 
   , "Properties drawer" =:
@@ -226,7 +238,7 @@ tests =
                 , "  :setting: foo"
                 , "  :END:"
                 ] =?>
-      (mempty::Blocks)
+      (setMeta "setting" ("foo" :: T.Text) (doc mempty))
 
   , "Logbook drawer" =:
       T.unlines [ "  :LogBook:"
@@ -266,7 +278,8 @@ tests =
 
   , "Search links are read as emph" =:
       "[[Wally][Where's Wally?]]" =?>
-      para (emph $ "Where's" <> space <> "Wally?")
+      para (spanWith ("", ["spurious-link"], [("target", "Wally")])
+                     (emph $ "Where's" <> space <> "Wally?"))
 
   , "Link to nonexistent anchor" =:
       T.unlines [ "<<link-here>> Target."
@@ -274,5 +287,6 @@ tests =
                 , "[[link$here][See here!]]"
                 ] =?>
       (para (spanWith ("link-here", [], []) mempty <> "Target.") <>
-       para (emph ("See" <> space <> "here!")))
+       para (spanWith ("", ["spurious-link"], [("target", "link$here")])
+                      (emph ("See" <> space <> "here!"))))
   ]

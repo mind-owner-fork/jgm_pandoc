@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Directive
-   Copyright   : © 2014-2020 Albert Krewinkel
+   Copyright   : © 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -13,7 +12,6 @@ Tests parsing of org directives (like @#+OPTIONS@).
 -}
 module Tests.Readers.Org.Directive (tests) where
 
-import Prelude
 import Data.Time (UTCTime (UTCTime), secondsToDiffTime)
 import Data.Time.Calendar (Day (ModifiedJulianDay))
 import Test.Tasty (TestTree, testGroup)
@@ -30,7 +28,7 @@ testWithFiles :: (ToString c)
               -> (T.Text, c)    -- ^ (input, expected value)
               -> TestTree
 testWithFiles fileDefs = test (orgWithFiles fileDefs)
-  where
+
 orgWithFiles :: [(FilePath, BS.ByteString)] -> T.Text -> Pandoc
 orgWithFiles fileDefs input =
   let readOrg' = readOrg def{ readerExtensions = getDefaultExtensions "org" }

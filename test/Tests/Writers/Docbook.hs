@@ -1,8 +1,6 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Tests.Writers.Docbook (tests) where
 
-import Prelude
 import Data.Text (unpack)
 import Test.Tasty
 import Tests.Helpers
@@ -13,9 +11,14 @@ import Text.Pandoc.Builder
 docbook :: (ToPandoc a) => a -> String
 docbook = docbookWithOpts def{ writerWrapText = WrapNone }
 
+docbook5 :: (ToPandoc a) => a -> String
+docbook5 = docbook5WithOpts def{ writerWrapText = WrapNone }
+
 docbookWithOpts :: ToPandoc a => WriterOptions -> a -> String
 docbookWithOpts opts = unpack . purely (writeDocbook4 opts) . toPandoc
 
+docbook5WithOpts :: ToPandoc a => WriterOptions -> a -> String
+docbook5WithOpts opts = unpack . purely (writeDocbook5 opts) . toPandoc
 {-
   "my test" =: X =?> Y
 
@@ -29,9 +32,11 @@ which is in turn shorthand for
 -}
 
 infix 4 =:
-(=:) :: (ToString a, ToPandoc a)
-     => String -> (a, String) -> TestTree
+(=:), testDb4, testDb5 :: (ToString a, ToPandoc a)
+                       => String -> (a, String) -> TestTree
 (=:) = test docbook
+testDb4 = test docbook
+testDb5 = test docbook5
 
 lineblock :: Blocks
 lineblock = para ("some text" <> linebreak <>
@@ -44,7 +49,19 @@ lineblock_out = [ "<literallayout>some text"
                 ]
 
 tests :: [TestTree]
-tests = [ testGroup "line blocks"
+tests = [ testGroup "inline elements"
+          [ testGroup "links"
+            [ testDb4 "db4 external link" $ link "https://example.com" "" "Hello"
+                                            =?> "<ulink url=\"https://example.com\">Hello</ulink>"
+            , testDb5 "db5 external link" $ link "https://example.com" "" "Hello"
+                                            =?> "<link xlink:href=\"https://example.com\">Hello</link>"
+            , testDb5 "anchor"            $ link "#foo" "" "Hello"
+                                            =?> "<link linkend=\"foo\">Hello</link>"
+            , testDb5 "automatic anchor"  $ link "#foo" "" ""
+                                            =?> "<xref linkend=\"foo\"></xref>"
+            ]
+          ]
+        , testGroup "line blocks"
           [ "none"       =: para "This is a test"
                               =?> unlines
                                     [ "<para>"
@@ -69,6 +86,72 @@ tests = [ testGroup "line blocks"
                                       [ "  </footnote> of footnotes"
                                       , "</para>" ]
                                     )
+          ]
+        , testGroup "divs"
+          [ "admonition" =: divWith ("foo", ["warning"], []) (para "This is a test")
+                              =?> unlines
+                                    [ "<warning id=\"foo\">"
+                                    , "  <para>"
+                                    , "    This is a test"
+                                    , "  </para>"
+                                    , "</warning>"
+                                    ]
+          , "admonition-with-title" =:
+                            divWith ("foo", ["note"], []) (
+                              divWith ("foo", ["title"], [])
+                                (plain (text "This is title")) <>
+                              para "This is a test"
+                            )
+                              =?> unlines
+                                    [ "<note id=\"foo\">"
+                                    , "  <title>This is title</title>"
+                                    , "  <para>"
+                                    , "    This is a test"
+                                    , "  </para>"
+                                    , "</note>"
+                                    ]
+          , "admonition-with-title-in-para" =:
+                            divWith ("foo", ["note"], []) (
+                              divWith ("foo", ["title"], [])
+                                (para "This is title") <>
+                              para "This is a test"
+                            )
+                              =?> unlines
+                                    [ "<note id=\"foo\">"
+                                    , "  <title>This is title</title>"
+                                    , "  <para>"
+                                    , "    This is a test"
+                                    , "  </para>"
+                                    , "</note>"
+                                    ]
+          , "single-child" =:
+                            divWith ("foo", [], []) (para "This is a test")
+                              =?> unlines
+                                    [ "<para id=\"foo\">"
+                                    , "  This is a test"
+                                    , "</para>"
+                                    ]
+          , "single-literal-child" =:
+                            divWith ("foo", [], []) lineblock
+                              =?> unlines
+                                    [ "<literallayout id=\"foo\">some text"
+                                    , "and more lines"
+                                    , "and again</literallayout>"
+                                    ]
+          , "multiple-children" =:
+                            divWith ("foo", [], []) (
+                              para "This is a test" <>
+                              para "This is an another test"
+                            )
+                              =?> unlines
+                                    [ "<anchor id=\"foo\" />"
+                                    , "<para>"
+                                    , "  This is a test"
+                                    , "</para>"
+                                    , "<para>"
+                                    , "  This is an another test"
+                                    , "</para>"
+                                    ]
           ]
         , testGroup "compact lists"
           [ testGroup "bullet"
@@ -302,4 +385,36 @@ tests = [ testGroup "line blocks"
                       ]
             ]
           ]
+          , testGroup "section attributes" $
+            let
+              headers =  headerWith ("myid1",[],[("role","internal"),("xml:id","anotherid"),("dir","rtl")]) 1 "header1"
+                      <> headerWith ("myid2",[],[("invalidname","value"),("arch","linux"),("dir","invaliddir")]) 1 "header2"
+            in
+            [ test docbook5 "sections with attributes (db5)" $
+              headers =?>
+              unlines [ "<section xmlns=\"http://docbook.org/ns/docbook\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xml:id=\"myid1\" role=\"internal\" dir=\"rtl\">"
+                      , "  <title>header1</title>"
+                      , "  <para>"
+                      , "  </para>"
+                      , "</section>"
+                      , "<section xmlns=\"http://docbook.org/ns/docbook\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xml:id=\"myid2\">"
+                      , "  <title>header2</title>"
+                      , "  <para>"
+                      , "  </para>"
+                      , "</section>"
+                      ]
+            , test docbook "sections with attributes (db4)" $
+              headers =?>
+              unlines [ "<sect1 id=\"myid1\" role=\"internal\">"
+                      , "  <title>header1</title>"
+                      , "  <para>"
+                      , "  </para>"
+                      , "</sect1>"
+                      , "<sect1 id=\"myid2\" arch=\"linux\">"
+                      , "  <title>header2</title>"
+                      , "  <para>"
+                      , "  </para>"
+                      , "</sect1>"
+                      ]
+            ]
         ]

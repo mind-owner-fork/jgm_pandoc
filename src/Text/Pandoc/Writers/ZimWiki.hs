@@ -1,8 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.ZimWiki
-   Copyright   : © 2008-2020 John MacFarlane,
+   Copyright   : © 2008-2022 John MacFarlane,
                    2017-2019 Alex Ivkin
    License     : GNU GPL, version 2 or above
 
@@ -20,6 +19,7 @@ import Control.Monad (zipWithM)
 import Control.Monad.State.Strict (StateT, evalStateT, gets, modify)
 import Data.Default (Default (..))
 import Data.List (transpose)
+import Data.List.NonEmpty (nonEmpty)
 import qualified Data.Map as Map
 import Text.DocLayout (render, literal)
 import Data.Maybe (fromMaybe)
@@ -85,9 +85,8 @@ blockToZimWiki opts (Div _attrs bs) = do
 
 blockToZimWiki opts (Plain inlines) = inlineListToZimWiki opts inlines
 
--- title beginning with fig: indicates that the image is a figure
 -- ZimWiki doesn't support captions - so combine together alt and caption into alt
-blockToZimWiki opts (Para [Image attr txt (src,T.stripPrefix "fig:" -> Just tit)]) = do
+blockToZimWiki opts (SimpleFigure attr txt (src, tit)) = do
   capt <- if null txt
              then return ""
              else (" " <>) `fmap` inlineListToZimWiki opts txt
@@ -115,7 +114,7 @@ blockToZimWiki opts b@(RawBlock f str)
 blockToZimWiki _ HorizontalRule = return "\n----\n"
 
 blockToZimWiki opts (Header level _ inlines) = do
-  contents <- inlineListToZimWiki opts $ removeFormatting inlines   -- emphasis, links etc. not allowed in headers
+  contents <- inlineListToZimWiki opts inlines
   let eqs = T.replicate ( 7 - level ) "="
   return $ eqs <> " " <> contents <> " " <> eqs <> "\n"
 
@@ -143,7 +142,8 @@ blockToZimWiki opts (Table _ blkCapt specs thead tbody tfoot) = do
                  then zipWithM (tableItemToZimWiki opts) aligns (head rows)
                  else mapM (inlineListToZimWiki opts . removeFormatting)headers  -- emphasis, links etc. are not allowed in table headers
   rows' <- mapM (zipWithM (tableItemToZimWiki opts) aligns) rows
-  let widths = map (maximum . map T.length) $ transpose (headers':rows')
+  let widths = map (maybe 0 maximum . nonEmpty . map T.length) $
+                  transpose (headers':rows')
   let padTo (width, al) s =
           case width - T.length s of
                x | x > 0 ->
@@ -324,7 +324,7 @@ inlineToZimWiki _ (Math mathType str) = return $ delim <> str <> delim   -- note
                      DisplayMath -> "$$"
                      InlineMath  -> "$"
 
--- | f == Format "html"     = return $ "<html>" <> str <> "</html>"
+-- f == Format "html"     = return $ "<html>" <> str <> "</html>"
 inlineToZimWiki opts il@(RawInline f str)
   | f == Format "zimwiki" = return str
   | f == Format "html"    = indentFromHTML opts str

@@ -1,8 +1,9 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Man
-   Copyright   : Copyright (C) 2007-2020 John MacFarlane
+   Copyright   : Copyright (C) 2007-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -15,6 +16,7 @@ Conversion of 'Pandoc' documents to roff man page format.
 module Text.Pandoc.Writers.Man ( writeMan ) where
 import Control.Monad.State.Strict
 import Data.List (intersperse)
+import Data.List.NonEmpty (nonEmpty)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -25,7 +27,6 @@ import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
-import Text.Pandoc.Walk (walk)
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Math
 import Text.Pandoc.Writers.Shared
@@ -107,11 +108,10 @@ blockToMan :: PandocMonad m
 blockToMan _ Null = return empty
 blockToMan opts (Div _ bs) = blockListToMan opts bs
 blockToMan opts (Plain inlines) =
-  liftM vcat $ mapM (inlineListToMan opts) $ splitSentences inlines
+  splitSentences <$> inlineListToMan opts inlines
 blockToMan opts (Para inlines) = do
-  contents <- liftM vcat $ mapM (inlineListToMan opts) $
-    splitSentences inlines
-  return $ text ".PP" $$ contents
+  contents <- inlineListToMan opts inlines
+  return $ text ".PP" $$ splitSentences contents
 blockToMan opts (LineBlock lns) =
   blockToMan opts $ linesToPara lns
 blockToMan _ b@(RawBlock f str)
@@ -174,8 +174,7 @@ blockToMan opts (BulletList items) = do
   return (vcat contents)
 blockToMan opts (OrderedList attribs items) = do
   let markers = take (length items) $ orderedListMarkers attribs
-  let indent = 1 +
-                     maximum (map T.length markers)
+  let indent = 1 + maybe 0 maximum (nonEmpty (map T.length markers))
   contents <- mapM (\(num, item) -> orderedListItemToMan opts num indent item) $
               zip markers items
   return (vcat contents)
@@ -229,11 +228,10 @@ definitionListItemToMan :: PandocMonad m
 definitionListItemToMan opts (label, defs) = do
   -- in most man pages, option and other code in option lists is boldface,
   -- but not other things, so we try to reproduce this style:
-  labelText <- inlineListToMan opts $ makeCodeBold label
+  labelText <- inlineListToMan opts label
   contents <- if null defs
                  then return empty
-                 else liftM vcat $ forM defs $ \blocks ->
-                        case blocks of
+                 else liftM vcat $ forM defs $ \case
                           (x:xs) -> do
                             first' <- blockToMan opts $
                                       case x of
@@ -247,11 +245,6 @@ definitionListItemToMan opts (label, defs) = do
                                         else literal ".RS" $$ rest' $$ literal ".RE"
                           [] -> return empty
   return $ literal ".TP" $$ nowrap labelText $$ contents
-
-makeCodeBold :: [Inline] -> [Inline]
-makeCodeBold = walk go
-  where go x@Code{} = Strong [x]
-        go x        = x
 
 -- | Convert list of Pandoc block elements to man.
 blockListToMan :: PandocMonad m
@@ -294,7 +287,8 @@ inlineToMan opts (Quoted DoubleQuote lst) = do
 inlineToMan opts (Cite _ lst) =
   inlineListToMan opts lst
 inlineToMan opts (Code _ str) =
-  withFontFeature 'C' (return (literal $ escString opts str))
+  -- note that the V font is specially defined in the default man template
+  withFontFeature 'V' (return (literal $ escString opts str))
 inlineToMan opts (Str str@(T.uncons -> Just ('.',_))) =
   return $ afterBreak "\\&" <> literal (escString opts str)
 inlineToMan opts (Str str) = return $ literal $ escString opts str

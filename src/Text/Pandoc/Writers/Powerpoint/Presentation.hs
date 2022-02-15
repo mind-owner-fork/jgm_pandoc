@@ -1,7 +1,9 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase                 #-}
+{-# LANGUAGE MultiWayIf                 #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE PatternGuards              #-}
 {-# LANGUAGE ViewPatterns               #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {- |
    Module      : Text.Pandoc.Writers.Powerpoint.Presentation
    Copyright   : Copyright (C) 2017-2020 Jesse Rosenthal
@@ -45,6 +47,7 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.List (intercalate)
+import Data.List.NonEmpty (nonEmpty)
 import Data.Default
 import Text.Pandoc.Definition
 import Text.Pandoc.ImageSize
@@ -52,7 +55,6 @@ import Text.Pandoc.Slides (getSlideLevel)
 import Text.Pandoc.Options
 import Text.Pandoc.Logging
 import Text.Pandoc.Walk
-import Data.Time (UTCTime)
 import qualified Text.Pandoc.Shared as Shared -- so we don't overlap "Element"
 import Text.Pandoc.Shared (tshow)
 import Text.Pandoc.Writers.Shared (lookupMetaInlines, lookupMetaBlocks
@@ -60,11 +62,13 @@ import Text.Pandoc.Writers.Shared (lookupMetaInlines, lookupMetaBlocks
                                  , toLegacyTable)
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Maybe (maybeToList, fromMaybe)
+import Data.Maybe (maybeToList, fromMaybe, listToMaybe, isNothing)
 import Text.Pandoc.Highlighting
 import qualified Data.Text as T
 import Control.Applicative ((<|>))
 import Skylighting
+import Data.Bifunctor (bimap)
+import Data.Char (isSpace)
 
 data WriterEnv = WriterEnv { envMetadata :: Meta
                            , envRunProps :: RunProps
@@ -76,6 +80,8 @@ data WriterEnv = WriterEnv { envMetadata :: Meta
                            , envInNoteSlide :: Bool
                            , envCurSlideId :: SlideId
                            , envInSpeakerNotes :: Bool
+                           , envInIncrementalDiv :: Maybe InIncrementalDiv
+                           , envInListInBlockQuote :: Bool
                            }
                  deriving (Show)
 
@@ -90,6 +96,8 @@ instance Default WriterEnv where
                   , envInNoteSlide = False
                   , envCurSlideId = SlideId "Default"
                   , envInSpeakerNotes = False
+                  , envInIncrementalDiv = Nothing
+                  , envInListInBlockQuote = False
                   }
 
 
@@ -109,6 +117,23 @@ instance Default WriterState where
                     , stLog = []
                     , stSpeakerNotes = mempty
                     }
+
+data InIncrementalDiv
+  = InIncremental
+  -- ^ The current content is contained within an "incremental" div.
+  | InNonIncremental
+  -- ^ The current content is contained within a "nonincremental" div.
+  deriving (Show)
+
+listShouldBeIncremental :: Pres Bool
+listShouldBeIncremental = do
+  incrementalOption <- asks (writerIncremental . envOpts)
+  inIncrementalDiv <- asks envInIncrementalDiv
+  inBlockQuote <- asks envInListInBlockQuote
+  let toBoolean = (\case InIncremental -> True
+                         InNonIncremental -> False)
+      maybeInvert = if inBlockQuote then not else id
+  pure (maybeInvert (maybe incrementalOption toBoolean inIncrementalDiv))
 
 metadataSlideId :: SlideId
 metadataSlideId = SlideId "Metadata"
@@ -167,7 +192,7 @@ data DocProps = DocProps { dcTitle :: Maybe T.Text
                          , dcKeywords :: Maybe [T.Text]
                          , dcDescription :: Maybe T.Text
                          , cpCategory :: Maybe T.Text
-                         , dcCreated :: Maybe UTCTime
+                         , dcDate :: Maybe T.Text
                          , customProperties :: Maybe [(T.Text, T.Text)]
                          } deriving (Show, Eq)
 
@@ -175,6 +200,7 @@ data DocProps = DocProps { dcTitle :: Maybe T.Text
 data Slide = Slide { slideId :: SlideId
                    , slideLayout :: Layout
                    , slideSpeakerNotes :: SpeakerNotes
+                   , slideBackgroundImage :: Maybe FilePath
                    } deriving (Show, Eq)
 
 newtype SlideId = SlideId T.Text
@@ -194,9 +220,15 @@ data Layout = MetadataSlide [ParaElem] [ParaElem] [[ParaElem]] [ParaElem]
             --             heading    content
             | TwoColumnSlide [ParaElem] [Shape] [Shape]
             --               heading    left    right
+            | ComparisonSlide [ParaElem] ([Shape], [Shape]) ([Shape], [Shape])
+            --                heading  left@(text, content) right@(text, content)
+            | ContentWithCaptionSlide [ParaElem] [Shape] [Shape]
+            --                        heading     text    content
+            | BlankSlide
             deriving (Show, Eq)
 
-data Shape = Pic PicProps FilePath [ParaElem]
+data Shape = Pic PicProps FilePath T.Text [ParaElem]
+           --                      title  alt-text
            | GraphicFrame [Graphic] [ParaElem]
            | TextBox [Paragraph]
            | RawOOXMLShape T.Text
@@ -217,7 +249,7 @@ data Graphic = Tbl TableProps [TableCell] [[TableCell]]
 
 
 data Paragraph = Paragraph { paraProps :: ParaProps
-                           , paraElems  :: [ParaElem]
+                           , paraElems :: [ParaElem]
                            } deriving (Show, Eq)
 
 data BulletType = Bullet
@@ -234,6 +266,7 @@ data ParaProps = ParaProps { pPropMarginLeft :: Maybe Pixels
                            , pPropAlign :: Maybe Algnment
                            , pPropSpaceBefore :: Maybe Pixels
                            , pPropIndent :: Maybe Pixels
+                           , pPropIncremental :: Bool
                            } deriving (Show, Eq)
 
 instance Default ParaProps where
@@ -244,6 +277,7 @@ instance Default ParaProps where
                   , pPropAlign = Nothing
                   , pPropSpaceBefore = Nothing
                   , pPropIndent = Just 0
+                  , pPropIncremental = False
                   }
 
 newtype TeXString = TeXString {unTeXString :: T.Text}
@@ -314,7 +348,7 @@ instance Default PicProps where
 --------------------------------------------------
 
 inlinesToParElems :: [Inline] -> Pres [ParaElem]
-inlinesToParElems ils = concatMapM inlineToParElems ils
+inlinesToParElems = concatMapM inlineToParElems
 
 inlineToParElems :: Inline -> Pres [ParaElem]
 inlineToParElems (Str s) = do
@@ -363,9 +397,7 @@ inlineToParElems (Note blks) = do
     then return []
     else do
     notes <- gets stNoteIds
-    let maxNoteId = case M.keys notes of
-          [] -> 0
-          lst -> maximum lst
+    let maxNoteId = maybe 0 maximum $ nonEmpty $ M.keys notes
         curNoteId = maxNoteId + 1
     modify $ \st -> st { stNoteIds = M.insert curNoteId blks notes }
     local (\env -> env{envRunProps = (envRunProps env){rLink = Just $ InternalTarget endNotesSlideId}}) $
@@ -441,7 +473,8 @@ blockToParagraphs (CodeBlock attr str) = do
 -- (BlockQuote List) as a list to maintain compatibility with other
 -- formats.
 blockToParagraphs (BlockQuote (blk : blks)) | isListType blk = do
-  ps  <- blockToParagraphs blk
+  ps  <- local (\env -> env { envInListInBlockQuote = True })
+           (blockToParagraphs blk)
   ps' <- blockToParagraphs $ BlockQuote blks
   return $ ps ++ ps'
 blockToParagraphs (BlockQuote blks) =
@@ -466,25 +499,26 @@ blockToParagraphs (Header _ (ident, _, _) ils) = do
   return [Paragraph def{pPropSpaceBefore = Just 30} parElems]
 blockToParagraphs (BulletList blksLst) = do
   pProps <- asks envParaProps
-  let lvl = pPropLevel pProps
+  incremental <- listShouldBeIncremental
   local (\env -> env{ envInList = True
-                    , envParaProps = pProps{ pPropLevel = lvl + 1
-                                           , pPropBullet = Just Bullet
+                    , envParaProps = pProps{ pPropBullet = Just Bullet
                                            , pPropMarginLeft = Nothing
                                            , pPropIndent = Nothing
+                                           , pPropIncremental = incremental
                                            }}) $
-    concatMapM multiParBullet blksLst
+    concatMapM multiParList blksLst
 blockToParagraphs (OrderedList listAttr blksLst) = do
   pProps <- asks envParaProps
-  let lvl = pPropLevel pProps
+  incremental <- listShouldBeIncremental
   local (\env -> env{ envInList = True
-                    , envParaProps = pProps{ pPropLevel = lvl + 1
-                                           , pPropBullet = Just (AutoNumbering listAttr)
+                    , envParaProps = pProps{ pPropBullet = Just (AutoNumbering listAttr)
                                            , pPropMarginLeft = Nothing
                                            , pPropIndent = Nothing
+                                           , pPropIncremental = incremental
                                            }}) $
-    concatMapM multiParBullet blksLst
+    concatMapM multiParList blksLst
 blockToParagraphs (DefinitionList entries) = do
+  incremental <- listShouldBeIncremental
   let go :: ([Inline], [[Block]]) -> Pres [Paragraph]
       go (ils, blksLst) = do
         term <-blockToParagraphs $ Para [Strong ils]
@@ -492,20 +526,35 @@ blockToParagraphs (DefinitionList entries) = do
         -- blockquote. We can extend this further later.
         definition <- concatMapM (blockToParagraphs . BlockQuote) blksLst
         return $ term ++ definition
-  concatMapM go entries
-blockToParagraphs (Div _ blks)  = concatMapM blockToParagraphs blks
+  local (\env -> env {envParaProps =
+                       (envParaProps env) {pPropIncremental = incremental}})
+    $ concatMapM go entries
+blockToParagraphs (Div (_, classes, _) blks) = let
+  hasIncremental = "incremental" `elem` classes
+  hasNonIncremental = "nonincremental" `elem` classes
+  incremental = if | hasIncremental -> Just InIncremental
+                   | hasNonIncremental -> Just InNonIncremental
+                   | otherwise -> Nothing
+  addIncremental env = env { envInIncrementalDiv = incremental }
+  in local addIncremental (concatMapM blockToParagraphs blks)
 blockToParagraphs blk = do
   addLogMessage $ BlockNotRendered blk
   return []
 
--- Make sure the bullet env gets turned off after the first para.
-multiParBullet :: [Block] -> Pres [Paragraph]
-multiParBullet [] = return []
-multiParBullet (b:bs) = do
+-- | Make sure the bullet env gets turned off after the first para.
+multiParList :: [Block] -> Pres [Paragraph]
+multiParList [] = return []
+multiParList (b:bs) = do
   pProps <- asks envParaProps
   p <- blockToParagraphs b
-  ps <- local (\env -> env{envParaProps = pProps{pPropBullet = Nothing}}) $
-    concatMapM blockToParagraphs bs
+  let level = pPropLevel pProps
+  ps <- local (\env -> env
+                { envParaProps = pProps
+                  { pPropBullet = Nothing
+                  , pPropLevel = level + 1
+                  }
+                })
+        $ concatMapM blockToParagraphs bs
   return $ p ++ ps
 
 cellToParagraphs :: Alignment -> SimpleCell -> Pres [Paragraph]
@@ -526,21 +575,22 @@ rowToParagraphs algns tblCells = do
   mapM (uncurry cellToParagraphs) pairs
 
 withAttr :: Attr -> Shape -> Shape
-withAttr attr (Pic picPr url caption) =
+withAttr attr (Pic picPr url title caption) =
   let picPr' = picPr { picWidth = dimension Width attr
                      , picHeight = dimension Height attr
                      }
   in
-    Pic picPr' url caption
+    Pic picPr' url title caption
 withAttr _ sp = sp
 
 blockToShape :: Block -> Pres Shape
 blockToShape (Plain ils) = blockToShape (Para ils)
-blockToShape (Para (il:_))  | Image attr ils (url, _) <- il =
-      (withAttr attr . Pic def (T.unpack url)) <$> inlinesToParElems ils
+blockToShape (Para (il:_))  | Image attr ils (url, title) <- il =
+      withAttr attr . Pic def (T.unpack url) title <$> inlinesToParElems ils
 blockToShape (Para (il:_))  | Link _ (il':_) target <- il
-                            , Image attr ils (url, _) <- il' =
-      (withAttr attr . Pic def{picPropLink = Just $ ExternalTarget target} (T.unpack url))
+                            , Image attr ils (url, title) <- il' =
+      withAttr attr .
+      Pic def{picPropLink = Just $ ExternalTarget target} (T.unpack url) title
       <$> inlinesToParElems ils
 blockToShape (Table _ blkCapt specs thead tbody tfoot) = do
   let (caption, algn, _, hdrCells, rows) = toLegacyTable blkCapt specs thead tbody tfoot
@@ -583,7 +633,30 @@ isImage Image{} = True
 isImage (Link _ (Image{} : _) _) = True
 isImage _ = False
 
-splitBlocks' :: [Block] -> [[Block]] -> [Block] -> Pres [[Block]]
+plainOrPara :: Block -> Maybe [Inline]
+plainOrPara (Plain ils) = Just ils
+plainOrPara (Para ils) = Just ils
+plainOrPara _ = Nothing
+
+notText :: Block -> Bool
+notText block | startsWithImage block = True
+notText Table{} = True
+notText _ = False
+
+startsWithImage :: Block -> Bool
+startsWithImage block = fromMaybe False $ do
+  inline <- plainOrPara block >>= listToMaybe
+  pure (isImage inline)
+
+-- | Group blocks into a number of "splits"
+splitBlocks' ::
+  -- | Blocks so far in the current split
+  [Block] ->
+  -- | Splits so far
+  [[Block]] ->
+  -- | All remaining blocks
+  [Block] ->
+  Pres [[Block]]
 splitBlocks' cur acc [] = return $ acc ++ ([cur | not (null cur)])
 splitBlocks' cur acc (HorizontalRule : blks) =
   splitBlocks' [] (acc ++ ([cur | not (null cur)])) blks
@@ -603,25 +676,31 @@ splitBlocks' cur acc (Para (il:ils) : blks) | isImage il = do
                      then span isNotesDiv blks
                      else ([], blks)
   case cur of
-    [Header n _ _] | n == slideLevel ->
+    [Header n _ _] | n == slideLevel || slideLevel == 0 ->
                             splitBlocks' []
                             (acc ++ [cur ++ [Para [il]] ++ nts])
                             (if null ils then blks' else Para ils : blks')
     _ -> splitBlocks' []
-         (acc ++ ([cur | not (null cur)]) ++ [Para [il] : nts])
+         (if any notText cur
+          then acc ++ ([cur | not (null cur)]) ++ [Para [il] : nts]
+          else acc ++ [cur ++ [Para [il]] ++ nts])
          (if null ils then blks' else Para ils : blks')
 splitBlocks' cur acc (tbl@Table{} : blks) = do
   slideLevel <- asks envSlideLevel
   let (nts, blks') = span isNotesDiv blks
   case cur of
-    [Header n _ _] | n == slideLevel ->
+    [Header n _ _] | n == slideLevel || slideLevel == 0 ->
                             splitBlocks' [] (acc ++ [cur ++ [tbl] ++ nts]) blks'
-    _ ->  splitBlocks' [] (acc ++ ([cur | not (null cur)]) ++ [tbl : nts]) blks'
+    _ -> splitBlocks' []
+         (if any notText cur
+          then acc ++ ([cur | not (null cur)]) ++ [tbl : nts]
+          else acc ++ ([cur ++ [tbl] ++ nts]))
+         blks'
 splitBlocks' cur acc (d@(Div (_, classes, _) _): blks) | "columns" `elem` classes =  do
   slideLevel <- asks envSlideLevel
   let (nts, blks') = span isNotesDiv blks
   case cur of
-    [Header n _ _] | n == slideLevel ->
+    [Header n _ _] | n == slideLevel || slideLevel == 0 ->
                             splitBlocks' [] (acc ++ [cur ++ [d] ++ nts]) blks'
     _ ->  splitBlocks' [] (acc ++ ([cur | not (null cur)]) ++ [d : nts]) blks'
 splitBlocks' cur acc (blk : blks) = splitBlocks' (cur ++ [blk]) acc blks
@@ -629,63 +708,96 @@ splitBlocks' cur acc (blk : blks) = splitBlocks' (cur ++ [blk]) acc blks
 splitBlocks :: [Block] -> Pres [[Block]]
 splitBlocks = splitBlocks' [] []
 
-blocksToSlide' :: Int -> [Block] -> SpeakerNotes -> Pres Slide
-blocksToSlide' lvl (Header n (ident, _, _) ils : blks) spkNotes
-  | n < lvl = do
-      registerAnchorId ident
-      sldId <- asks envCurSlideId
-      hdr <- inlinesToParElems ils
-      return $ Slide sldId (TitleSlide hdr) spkNotes
-  | n == lvl = do
-      registerAnchorId ident
-      hdr <- inlinesToParElems ils
-      -- Now get the slide without the header, and then add the header
-      -- in.
-      slide <- blocksToSlide' lvl blks spkNotes
-      let layout = case slideLayout slide of
-            ContentSlide _ cont          -> ContentSlide hdr cont
-            TwoColumnSlide _ contL contR -> TwoColumnSlide hdr contL contR
-            layout'                     -> layout'
-      return $ slide{slideLayout = layout}
-blocksToSlide' _ (blk : blks) spkNotes
+-- | Assuming the slide title is already handled, convert these blocks to the
+-- body content for the slide.
+bodyBlocksToSlide :: Int -> [Block] -> SpeakerNotes -> Pres Slide
+bodyBlocksToSlide _ (blk : blks) spkNotes
   | Div (_, classes, _) divBlks <- blk
   , "columns" `elem` classes
   , Div (_, clsL, _) blksL : Div (_, clsR, _) blksR : remaining <- divBlks
   , "column" `elem` clsL, "column" `elem` clsR = do
       mapM_ (addLogMessage . BlockNotRendered) (blks ++ remaining)
-      mbSplitBlksL <- splitBlocks blksL
-      mbSplitBlksR <- splitBlocks blksR
-      let blksL' = case mbSplitBlksL of
-            bs : _ -> bs
-            []     -> []
-      let blksR' = case mbSplitBlksR of
-            bs : _ -> bs
-            []     -> []
-      shapesL <- blocksToShapes blksL'
-      shapesR <- blocksToShapes blksR'
+      let mkTwoColumn left right = do
+            blksL' <- join . take 1 <$> splitBlocks left
+            blksR' <- join . take 1 <$> splitBlocks right
+            shapesL <- blocksToShapes blksL'
+            shapesR <- blocksToShapes blksR'
+            sldId <- asks envCurSlideId
+            return $ Slide
+              sldId
+              (TwoColumnSlide [] shapesL shapesR)
+              spkNotes
+              Nothing
+      let mkComparison blksL1  blksL2 blksR1 blksR2 = do
+            shapesL1 <- blocksToShapes blksL1
+            shapesL2 <- blocksToShapes blksL2
+            shapesR1 <- blocksToShapes blksR1
+            shapesR2 <- blocksToShapes blksR2
+            sldId <- asks envCurSlideId
+            return $ Slide
+              sldId
+              (ComparisonSlide [] (shapesL1, shapesL2) (shapesR1, shapesR2))
+              spkNotes
+              Nothing
+      let (blksL1, blksL2) = break notText blksL
+          (blksR1, blksR2) = break notText blksR
+      if (any null [blksL1, blksL2]) && (any null [blksR1, blksR2])
+      then mkTwoColumn blksL blksR
+      else mkComparison blksL1 blksL2 blksR1 blksR2
+bodyBlocksToSlide _ (blk : blks) spkNotes = do
       sldId <- asks envCurSlideId
-      return $ Slide
-        sldId
-        (TwoColumnSlide [] shapesL shapesR)
-        spkNotes
-blocksToSlide' _ (blk : blks) spkNotes = do
       inNoteSlide <- asks envInNoteSlide
-      shapes <- if inNoteSlide
-                then forceFontSize noteSize $ blocksToShapes (blk : blks)
-                else blocksToShapes (blk : blks)
-      sldId <- asks envCurSlideId
-      return $
-        Slide
-        sldId
-        (ContentSlide [] shapes)
-        spkNotes
-blocksToSlide' _ [] spkNotes = do
+      let mkSlide s =
+            Slide sldId s spkNotes Nothing
+      if inNoteSlide
+      then mkSlide . ContentSlide [] <$>
+          forceFontSize noteSize (blocksToShapes (blk : blks))
+      else let
+        contentOrBlankSlide =
+          if makesBlankSlide (blk : blks)
+          then pure (mkSlide BlankSlide)
+          else mkSlide . ContentSlide [] <$> blocksToShapes (blk : blks)
+        in case break notText (blk : blks) of
+          ([], _) -> contentOrBlankSlide
+          (_, []) -> contentOrBlankSlide
+          (textBlocks, contentBlocks) -> do
+            textShapes <- blocksToShapes textBlocks
+            contentShapes <- blocksToShapes contentBlocks
+            return (mkSlide (ContentWithCaptionSlide [] textShapes contentShapes))
+bodyBlocksToSlide _ [] spkNotes = do
   sldId <- asks envCurSlideId
   return $
     Slide
     sldId
-    (ContentSlide [] [])
+    BlankSlide
     spkNotes
+    Nothing
+
+blocksToSlide' :: Int -> [Block] -> SpeakerNotes -> Pres Slide
+blocksToSlide' lvl (Header n (ident, _, attributes) ils : blks) spkNotes
+  | n < lvl = do
+      registerAnchorId ident
+      sldId <- asks envCurSlideId
+      hdr <- inlinesToParElems ils
+      return $ Slide sldId (TitleSlide hdr) spkNotes backgroundImage
+  | n == lvl || lvl == 0 = do
+      registerAnchorId ident
+      hdr <- inlinesToParElems ils
+      -- Now get the slide without the header, and then add the header
+      -- in.
+      slide <- bodyBlocksToSlide lvl blks spkNotes
+      let layout = case slideLayout slide of
+            ContentSlide _ cont          -> ContentSlide hdr cont
+            TwoColumnSlide _ contL contR -> TwoColumnSlide hdr contL contR
+            ComparisonSlide _ contL contR -> ComparisonSlide hdr contL contR
+            ContentWithCaptionSlide _ text content -> ContentWithCaptionSlide hdr text content
+            BlankSlide -> if all inlineIsBlank ils then BlankSlide else ContentSlide hdr []
+            layout'                     -> layout'
+      return $ slide{slideLayout = layout, slideBackgroundImage = backgroundImage}
+  where
+    backgroundImage = T.unpack <$> (lookup "background-image" attributes
+                                   <|> lookup "data-background-image" attributes)
+blocksToSlide' lvl blks spkNotes = bodyBlocksToSlide lvl blks spkNotes
 
 blockToSpeakerNotes :: Block -> Pres SpeakerNotes
 blockToSpeakerNotes (Div (_, ["notes"], _) blks) =
@@ -721,7 +833,7 @@ makeNoteEntry (n, blks) =
   let enum = Str (tshow n <> ".")
   in
     case blks of
-      (Para ils : blks') -> (Para $ enum : Space : ils) : blks'
+      (Para ils : blks') -> Para (enum : Space : ils) : blks'
       _ -> Para [enum] : blks
 
 forceFontSize :: Pixels -> Pres a -> Pres a
@@ -765,12 +877,13 @@ getMetaSlide  = do
          metadataSlideId
          (MetadataSlide title subtitle authors date)
          mempty
+         Nothing
 
 addSpeakerNotesToMetaSlide :: Slide -> [Block] -> Pres (Slide, [Block])
-addSpeakerNotesToMetaSlide (Slide sldId layout@(MetadataSlide{}) spkNotes) blks =
+addSpeakerNotesToMetaSlide (Slide sldId layout@MetadataSlide{} spkNotes backgroundImage) blks =
   do let (ntsBlks, blks') = span isNotesDiv blks
      spkNotes' <- mconcat <$> mapM blockToSpeakerNotes ntsBlks
-     return (Slide sldId layout (spkNotes <> spkNotes'), blks')
+     return (Slide sldId layout (spkNotes <> spkNotes') backgroundImage, blks')
 addSpeakerNotesToMetaSlide sld blks = return (sld, blks)
 
 makeTOCSlide :: [Block] -> Pres Slide
@@ -806,7 +919,7 @@ applyToParagraph f para = do
   return $ para {paraElems = paraElems'}
 
 applyToShape :: Monad m => (ParaElem -> m ParaElem) -> Shape -> m Shape
-applyToShape f (Pic pPr fp pes) = Pic pPr fp <$> mapM f pes
+applyToShape f (Pic pPr fp title pes) = Pic pPr fp title <$> mapM f pes
 applyToShape f (GraphicFrame gfx pes) = GraphicFrame gfx <$> mapM f pes
 applyToShape f (TextBox paras) = TextBox <$> mapM (applyToParagraph f) paras
 applyToShape _ (RawOOXMLShape str) = return $ RawOOXMLShape str
@@ -828,6 +941,19 @@ applyToLayout f (TwoColumnSlide hdr contentL contentR) = do
   contentL' <- mapM (applyToShape f) contentL
   contentR' <- mapM (applyToShape f) contentR
   return $ TwoColumnSlide hdr' contentL' contentR'
+applyToLayout f (ComparisonSlide hdr (contentL1, contentL2) (contentR1, contentR2)) = do
+  hdr' <- mapM f hdr
+  contentL1' <- mapM (applyToShape f) contentL1
+  contentL2' <- mapM (applyToShape f) contentL2
+  contentR1' <- mapM (applyToShape f) contentR1
+  contentR2' <- mapM (applyToShape f) contentR2
+  return $ ComparisonSlide hdr' (contentL1', contentL2') (contentR1', contentR2')
+applyToLayout f (ContentWithCaptionSlide hdr textShapes contentShapes) = do
+  hdr' <- mapM f hdr
+  textShapes' <- mapM (applyToShape f) textShapes
+  contentShapes' <- mapM (applyToShape f) contentShapes
+  return $ ContentWithCaptionSlide hdr' textShapes' contentShapes'
+applyToLayout _ BlankSlide = pure BlankSlide
 
 applyToSlide :: Monad m => (ParaElem -> m ParaElem) -> Slide -> m Slide
 applyToSlide f slide = do
@@ -879,9 +1005,72 @@ emptyLayout layout = case layout of
     all emptyParaElem hdr &&
     all emptyShape shapes1 &&
     all emptyShape shapes2
+  ComparisonSlide hdr (shapesL1, shapesL2) (shapesR1, shapesR2) ->
+    all emptyParaElem hdr &&
+    all emptyShape shapesL1 &&
+    all emptyShape shapesL2 &&
+    all emptyShape shapesR1 &&
+    all emptyShape shapesR2
+  ContentWithCaptionSlide hdr textShapes contentShapes ->
+    all emptyParaElem hdr &&
+    all emptyShape textShapes &&
+    all emptyShape contentShapes
+  BlankSlide -> False
+
 
 emptySlide :: Slide -> Bool
-emptySlide (Slide _ layout notes) = (notes == mempty) && emptyLayout layout
+emptySlide (Slide _ layout notes backgroundImage)
+  = (notes == mempty)
+  && emptyLayout layout
+  && isNothing backgroundImage
+
+makesBlankSlide :: [Block] -> Bool
+makesBlankSlide = all blockIsBlank
+
+blockIsBlank :: Block -> Bool
+blockIsBlank
+  = \case
+      Plain ins -> all inlineIsBlank ins
+      Para ins -> all inlineIsBlank ins
+      LineBlock inss -> all (all inlineIsBlank) inss
+      CodeBlock _ txt -> textIsBlank txt
+      RawBlock _ txt -> textIsBlank txt
+      BlockQuote bls -> all blockIsBlank bls
+      OrderedList _ blss -> all (all blockIsBlank) blss
+      BulletList blss -> all (all blockIsBlank) blss
+      DefinitionList ds -> all (uncurry (&&) . bimap (all inlineIsBlank) (all (all blockIsBlank))) ds
+      Header _ _ ils -> all inlineIsBlank ils
+      HorizontalRule -> True
+      Table{} -> False
+      Div _ bls -> all blockIsBlank bls
+      Null -> True
+
+textIsBlank :: T.Text -> Bool
+textIsBlank = T.all isSpace
+
+inlineIsBlank :: Inline -> Bool
+inlineIsBlank
+  = \case
+      (Str txt) -> textIsBlank txt
+      (Emph ins) -> all inlineIsBlank ins
+      (Underline ins) -> all inlineIsBlank ins
+      (Strong ins) -> all inlineIsBlank ins
+      (Strikeout ins) -> all inlineIsBlank ins
+      (Superscript ins) -> all inlineIsBlank ins
+      (Subscript ins) -> all inlineIsBlank ins
+      (SmallCaps ins) -> all inlineIsBlank ins
+      (Quoted _ ins) -> all inlineIsBlank ins
+      (Cite _ _) -> False
+      (Code _ txt) -> textIsBlank txt
+      Space -> True
+      SoftBreak -> True
+      LineBreak -> True
+      (Math _ txt) -> textIsBlank txt
+      (RawInline _ txt) -> textIsBlank txt
+      (Link _ ins (t1, t2)) -> all inlineIsBlank ins && textIsBlank t1 && textIsBlank t2
+      (Image _ ins (t1, t2)) -> all inlineIsBlank ins && textIsBlank t1 && textIsBlank t2
+      (Note bls) -> all blockIsBlank bls
+      (Span _ ins) -> all inlineIsBlank ins
 
 blocksToPresentationSlides :: [Block] -> Pres [Slide]
 blocksToPresentationSlides blks = do
@@ -961,7 +1150,11 @@ metaToDocProps meta =
             , dcKeywords = keywords
             , dcDescription = description
             , cpCategory = Shared.stringify <$> lookupMeta "category" meta
-            , dcCreated = Nothing
+            , dcDate =
+              let t = Shared.stringify (docDate meta)
+              in if T.null t
+                 then Nothing
+                 else Just t
             , customProperties = customProperties'
             }
 

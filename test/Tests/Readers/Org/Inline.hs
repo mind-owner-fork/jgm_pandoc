@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Inline
-   Copyright   : © 2014-2020 Albert Krewinkel
+   Copyright   : © 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -13,7 +12,6 @@ Tests parsing of org inlines.
 -}
 module Tests.Readers.Org.Inline (tests) where
 
-import Prelude
 import Data.List (intersperse)
 import Test.Tasty (TestTree, testGroup)
 import Tests.Helpers ((=?>))
@@ -56,7 +54,7 @@ tests =
 
   , "Verbatim" =:
       "=Robot.rock()=" =?>
-      para (code "Robot.rock()")
+      para (codeWith ("", ["verbatim"], []) "Robot.rock()")
 
   , "Code" =:
       "~word for word~" =?>
@@ -190,7 +188,7 @@ tests =
                   ])
   , "Verbatim text can contain equal signes (=)" =:
       "=is_subst = True=" =?>
-      para (code "is_subst = True")
+      para (codeWith ("", ["verbatim"], []) "is_subst = True")
 
   , testGroup "Images"
     [ "Image" =:
@@ -210,10 +208,18 @@ tests =
              <> image "sunset.jpg" "" "")
 
     , "Image with html attributes" =:
-      T.unlines [ "#+ATTR_HTML: :width 50%"
+      T.unlines [ "#+attr_html: :width 50%"
                 , "[[file:guinea-pig.gif]]"
                 ] =?>
       para (imageWith ("", [], [("width", "50%")]) "guinea-pig.gif" "" "")
+
+    , "HTML attributes can have trailing spaces" =:
+      T.unlines [ "#+attr_html: :width 100% :height 360px  "
+                , "[[file:fireworks.jpg]]"
+                ] =?>
+      let kv = [("width", "100%"), ("height", "360px")]
+      in para (imageWith (mempty, mempty, kv) "fireworks.jpg" mempty mempty)
+
 
     , "Uppercase extension" =:
       "[[file:test.PNG]]" =?>
@@ -369,7 +375,7 @@ tests =
                 ] =?>
       para (emph "Hello, World")
 
-  , "Macro repeting its argument" =:
+  , "Macro duplicating its argument" =:
       T.unlines [ "#+MACRO: HELLO $1$1"
                 , "{{{HELLO(moin)}}}"
                 ] =?>

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Roff
-   Copyright   : Copyright (C) 2007-2020 John MacFarlane
+   Copyright   : Copyright (C) 2007-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -55,6 +55,7 @@ defaultWriterState = WriterState{ stHasInlineMath = False
                                                        ('I',False)
                                                      , ('B',False)
                                                      , ('C',False)
+                                                     , ('V',False)
                                                      ]
                                 , stHasTables     = False
                                 }
@@ -90,7 +91,7 @@ escapeString e = Text.concat . escapeString' e . Text.unpack
                 AllowUTF8 -> Text.singleton x : escapeString' escapeMode xs
                 AsciiOnly ->
                   let accents = catMaybes $ takeWhile isJust
-                        (map (\c -> Map.lookup c combiningAccentsMap) xs)
+                        (map (`Map.lookup` combiningAccentsMap) xs)
                       rest = drop (length accents) xs
                       s = case Map.lookup x characterCodeMap of
                             Just t  -> "\\[" <> Text.unwords (t:accents) <> "]"
@@ -106,6 +107,7 @@ fontChange = do
   features <- gets stFontFeatures
   inHeader <- gets stInHeader
   let filling = ['C' | fromMaybe False $ Map.lookup 'C' features] ++
+                ['V' | fromMaybe False $ Map.lookup 'V' features] ++
                 ['B' | inHeader ||
                        fromMaybe False (Map.lookup 'B' features)] ++
                 ['I' | fromMaybe False $ Map.lookup 'I' features]

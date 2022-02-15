@@ -1,6 +1,6 @@
 {- |
 Module      : Tests.Lua.Module
-Copyright   : © 2019-2020 Albert Krewinkel
+Copyright   : © 2019-2022 Albert Krewinkel
 License     : GNU GPL, version 2 or above
 
 Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -25,10 +25,16 @@ tests =
                   ("lua" </> "module" </> "pandoc-list.lua")
   , testPandocLua "pandoc.mediabag"
                   ("lua" </> "module" </> "pandoc-mediabag.lua")
+  , testPandocLua "pandoc.path"
+                  ("lua" </> "module" </> "pandoc-path.lua")
+  , testPandocLua "pandoc.template"
+                  ("lua" </> "module" </> "pandoc-template.lua")
   , testPandocLua "pandoc.types"
                   ("lua" </> "module" </> "pandoc-types.lua")
-  , testPandocLua "pandoc.util"
+  , testPandocLua "pandoc.utils"
                   ("lua" </> "module" </> "pandoc-utils.lua")
+  , testPandocLua "globals"
+                  ("lua" </> "module" </> "globals.lua")
   ]
 
 testPandocLua :: TestName -> FilePath -> TestTree
