@@ -4,6 +4,7 @@ module Tests.Writers.HTML (tests) where
 import Data.Text (unpack)
 import qualified Data.Text as T
 import Test.Tasty
+import Test.Tasty.HUnit (HasCallStack)
 import Tests.Helpers
 import Text.Pandoc
 import Text.Pandoc.Arbitrary ()
@@ -33,7 +34,7 @@ which is in turn shorthand for
 -}
 
 infix 4 =:
-(=:) :: (ToString a, ToPandoc a)
+(=:) :: (ToString a, ToPandoc a, HasCallStack)
      => String -> (a, String) -> TestTree
 (=:) = test html
 
@@ -82,6 +83,11 @@ tests =
     , tQ "quote with cite attribute (with q-tags)" $
       doubleQuoted (spanWith ("", [], [("cite", "http://example.org")]) (str "examples"))
       =?> "<q cite=\"http://example.org\">examples</q>"
+    ]
+  , testGroup "code"
+    [ "code should be rendered correctly" =:
+      plain (codeWith ("",[],[]) "Answer is 42") =?>
+      "<code>Answer is 42</code>"
     ]
   , testGroup "sample"
     [ "sample should be rendered correctly" =:
@@ -187,13 +193,13 @@ tests =
           , "<p>A note inside a block quote.<a href=\"#fn2\" class=\"footnote-ref\" id=\"fnref2\"><sup>2</sup></a></p>"
           , "<p>A second paragraph.</p>"
           , "</blockquote>"
-          , "</div>"
           , "<div class=\"footnotes footnotes-end-of-section\">"
           , "<hr />"
           , "<ol>"
           , "<li id=\"fn1\"><p>Down here.<a href=\"#fnref1\" class=\"footnote-back\">↩︎</a></p></li>"
           , "<li id=\"fn2\"><p>The second note.<a href=\"#fnref2\" class=\"footnote-back\">↩︎</a></p></li>"
           , "</ol>"
+          , "</div>"
           , "</div>"
           , "<div class=\"section level2\">"
           , "<h2>Second section</h2>"

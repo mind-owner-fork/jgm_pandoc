@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.EndNote
-   Copyright   : Copyright (C) 2022 John MacFarlane
+   Copyright   : Copyright (C) 2022-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -30,7 +30,7 @@ import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.Class (PandocMonad)
 import Text.Pandoc.Citeproc.MetaValue (referenceToMetaValue)
 import Text.Pandoc.Sources (Sources(..), ToSources(..), sourcesToText)
-import Text.Pandoc.Citeproc.BibTeX (toName)
+import Text.Pandoc.Citeproc.Name (toName, NameOpts(..))
 import Control.Applicative ((<|>))
 import Control.Monad.Except (throwError)
 import Control.Monad (mzero, unless)
@@ -74,10 +74,10 @@ readEndNoteXML _opts inp = do
 readEndNoteXMLCitation :: PandocMonad m
                     => Sources -> m (Citeproc.Citation Text)
 readEndNoteXMLCitation sources = do
-  tree <- either (throwError . PandocXMLError "") return $
+  tree <- either (throwError . PandocXMLError "EndNote references") return $
               parseXMLElement (TL.fromStrict . sourcesToText $ sources)
   unless (qName (elName tree) == "EndNote") $
-    throwError $ PandocXMLError "" "Expected EndNote element"
+    throwError $ PandocXMLError "EndNote references" "Expected EndNote element"
   let items = map toCitationItem $ filterElementsName (name "Cite") tree
   return $ Citeproc.Citation{
                      Citeproc.citationId = Nothing
@@ -88,7 +88,7 @@ readEndNoteXMLCitation sources = do
 readEndNoteXMLReferences :: PandocMonad m
                          => Sources -> m [Reference Text]
 readEndNoteXMLReferences sources = do
-  tree <- either (throwError . PandocXMLError "") return $
+  tree <- either (throwError . PandocXMLError "EndNote references") return $
               parseXMLElement (TL.fromStrict . sourcesToText $ sources)
   let records = filterElementsName (name "record") tree
   return $ map recordToReference records
@@ -140,7 +140,9 @@ recordToReference e =
      filterChildrenName (name "contributors") e >>=
      filterChildrenName (name "authors") >>=
      filterChildrenName (name "author") >>=
-     toName [] . B.toList .  B.text . T.strip . getText
+          toName NameOpts{ nameOptsPrefixIsNonDroppingParticle = False
+                         , nameOptsUseJuniorComma = False }
+             . B.toList .  B.text . T.strip . getText
    titles = do
      x <- filterChildrenName (name "titles") e
      (key, name') <- [("title", "title"),

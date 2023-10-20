@@ -3,15 +3,13 @@ module Text.Pandoc.Citeproc.MetaValue
   ( referenceToMetaValue
   , metaValueToReference
   , metaValueToText
-  , metaValueToPath
   )
 where
 
 import Citeproc.Types
 import Text.Pandoc.Definition
 import Text.Pandoc.Builder as B
-import Text.Pandoc.Walk (query)
-import Text.Pandoc.Shared (stringify)
+import Text.Pandoc.Shared (stringify, blocksToInlines')
 import Data.Maybe
 import Safe
 import qualified Data.Set as Set
@@ -27,9 +25,6 @@ metaValueToText (MetaInlines ils) = Just $ stringify ils
 metaValueToText (MetaBlocks bls) = Just $ stringify bls
 metaValueToText (MetaList xs) = T.unwords <$> mapM metaValueToText xs
 metaValueToText _ = Nothing
-
-metaValueToPath :: MetaValue -> Maybe FilePath
-metaValueToPath = fmap T.unpack . metaValueToText
 
 metaValueToBool :: MetaValue -> Maybe Bool
 metaValueToBool (MetaBool b) = Just b
@@ -56,6 +51,7 @@ valToMetaValue (FancyVal ils) = MetaInlines (B.toList ils)
 valToMetaValue (NumVal n) = MetaString (T.pack $ show n)
 valToMetaValue (NamesVal ns) = MetaList $ map nameToMetaValue ns
 valToMetaValue (DateVal d) = dateToMetaValue d
+valToMetaValue _ = MetaString mempty
 
 nameToMetaValue :: Name -> MetaValue
 nameToMetaValue name =
@@ -129,7 +125,7 @@ metaValueToVal k v
     case v of
       MetaString t -> TextVal t
       MetaInlines ils -> FancyVal (B.fromList ils)
-      MetaBlocks bs   -> FancyVal (B.fromList $ query id bs)
+      MetaBlocks bs   -> FancyVal (blocksToInlines' bs)
       MetaBool b   -> TextVal (if b then "true" else "false")
       MetaList _   -> TextVal mempty
       MetaMap  _   -> TextVal mempty

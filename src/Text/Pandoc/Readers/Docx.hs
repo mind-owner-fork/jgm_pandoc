@@ -23,7 +23,7 @@ implemented, [-] means partially implemented):
 
   - [X] Para
   - [X] CodeBlock (styled with `SourceCode`)
-  - [X] BlockQuote (styled with `Quote`, `BlockQuote`, or, optionally,
+  - [X] BlockQuote (styled with `Quote`, `BlockQuote`, `Intense Quote` or, optionally,
         indented)
   - [X] OrderedList
   - [X] BulletList
@@ -59,8 +59,17 @@ module Text.Pandoc.Readers.Docx
        ) where
 
 import Codec.Archive.Zip
+import Control.Monad ( liftM, unless )
 import Control.Monad.Reader
+    ( asks,
+      MonadReader(local),
+      MonadTrans(lift),
+      ReaderT(runReaderT) )
 import Control.Monad.State.Strict
+    ( StateT,
+      gets,
+      modify,
+      evalStateT )
 import Data.Bifunctor (bimap, first)
 import qualified Data.ByteString.Lazy as B
 import Data.Default (Default)
@@ -117,6 +126,7 @@ data DState = DState { docxAnchorMap :: M.Map T.Text T.Text
                      , docxAnchorSet :: Set.Set T.Text
                      , docxImmedPrevAnchor :: Maybe T.Text
                      , docxMediaBag  :: MediaBag
+                     , docxNumberedHeadings :: Bool
                      , docxDropCap   :: Inlines
                      -- keep track of (numId, lvl) values for
                      -- restarting
@@ -131,6 +141,7 @@ instance Default DState where
                , docxAnchorSet = mempty
                , docxImmedPrevAnchor = Nothing
                , docxMediaBag  = mempty
+               , docxNumberedHeadings = False
                , docxDropCap   = mempty
                , docxListState = M.empty
                , docxPrevPara  = mempty
@@ -228,12 +239,12 @@ isCodeCharStyle :: CharStyle -> Bool
 isCodeCharStyle = isInheritedFromStyles ["Verbatim Char"]
 
 isCodeDiv :: ParagraphStyle -> Bool
-isCodeDiv = hasStylesInheritedFrom ["Source Code"]
+isCodeDiv = hasStylesInheritedFrom ["Source Code", "SourceCode", "source_code"]
 
 isBlockQuote :: ParStyle -> Bool
 isBlockQuote =
   isInheritedFromStyles [
-    "Quote", "Block Text", "Block Quote", "Block Quotation"
+    "Quote", "Block Text", "Block Quote", "Block Quotation", "Intense Quote"
     ]
 
 runElemToInlines :: RunElem -> Inlines
@@ -294,6 +305,8 @@ runStyleToTransform rPr' = do
             emph . go rPr{isItalic = Nothing, isItalicCTL = Nothing}
         | Just True <- bold rPr =
             strong . go rPr{isBold = Nothing, isBoldCTL = Nothing}
+        | Just _ <- rHighlight rPr =
+            spanWith ("",["mark"],[]) . go rPr{rHighlight = Nothing}
         | Just True <- isSmallCaps rPr =
             smallcaps . go rPr{isSmallCaps = Nothing}
         | Just True <- isStrike rPr =
@@ -455,6 +468,8 @@ parPartToInlines' (ExternalHyperLink target children) = do
   return $ link target "" ils
 parPartToInlines' (PlainOMath exps) =
   return $ math $ writeTeX exps
+parPartToInlines' (OMathPara exps) =
+  return $ displayMath $ writeTeX exps
 parPartToInlines' (Field info children) =
   case info of
     HyperlinkField url -> parPartToInlines' $ ExternalHyperLink url children
@@ -609,10 +624,10 @@ extraAttr s = ("", [], [("custom-style", fromStyleName $ getStyleName s)])
 
 paragraphStyleToTransform :: PandocMonad m => ParagraphStyle -> DocxContext m (Blocks -> Blocks)
 paragraphStyleToTransform pPr =
-  let stylenames = map getStyleName (pStyle pPr)
-      transform = if (`elem` listParagraphStyles) `any` stylenames || relativeIndent pPr <= 0
-                  then id
-                  else blockQuote
+  let transform = if relativeIndent pPr > 0 && not (numbered pPr) &&
+                        not (any ((`elem` listParagraphStyles) . getStyleName) (pStyle pPr))
+                  then blockQuote
+                  else id
   in do
     extStylesEnabled <- asks (isEnabled Ext_styles . docxOptions)
     return $ foldr (\parStyle transform' ->
@@ -662,10 +677,17 @@ bodyPartToBlocks (Paragraph pPr parparts)
         T.concat $
         map parPartToText parparts
   | Just (style, n) <- pHeading pPr = do
-    ils <-local (\s-> s{docxInHeaderBlock=True})
+    ils <- local (\s-> s{docxInHeaderBlock=True})
            (smushInlines <$> mapM parPartToInlines parparts)
+    let classes = map normalizeToClassName . delete style
+                $ getStyleNames (pStyle pPr)
+
+    hasNumbering <- gets docxNumberedHeadings
+    let addNum = if hasNumbering && not (numbered pPr)
+                 then (++ ["unnumbered"])
+                 else id
     makeHeaderAnchor $
-      headerWith ("", map normalizeToClassName . delete style $ getStyleNames (pStyle pPr), []) n ils
+      headerWith ("", addNum classes, []) n ils
   | otherwise = do
     ils <- trimSps . smushInlines <$> mapM parPartToInlines parparts
     prevParaIls <- gets docxPrevPara
@@ -773,8 +795,6 @@ bodyPartToBlocks (Tbl cap grid look parts) = do
                  (TableHead nullAttr headerCells)
                  [TableBody nullAttr 0 [] bodyCells]
                  (TableFoot nullAttr [])
-bodyPartToBlocks (OMathPara e) =
-  return $ para $ displayMath (writeTeX e)
 
 -- replace targets with generated anchors.
 rewriteLink' :: PandocMonad m => Inline -> DocxContext m Inline
@@ -812,6 +832,9 @@ bodyToOutput (Body bps) = do
   let (metabps, blkbps) = sepBodyParts bps
   meta <- bodyPartsToMeta metabps
   captions <- catMaybes <$> mapM bodyPartToTableCaption blkbps
+  let isNumberedPara (Paragraph pPr _) = numbered pPr
+      isNumberedPara _                 = False
+  modify (\s -> s { docxNumberedHeadings = any isNumberedPara blkbps })
   modify (\s -> s { docxTableCaptions = captions })
   blks <- smushBlocks <$> mapM bodyPartToBlocks blkbps
   blks' <- rewriteLinks $ blocksToDefinitions $ blocksToBullets $ toList blks

@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {- |
    Module      : Text.Pandoc.Error
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -23,18 +23,13 @@ import Control.Exception (Exception, displayException)
 import Data.Typeable (Typeable)
 import Data.Word (Word8)
 import Data.Text (Text)
-import Data.List (sortOn)
 import qualified Data.Text as T
-import Data.Ord (Down(..))
 import GHC.Generics (Generic)
 import Network.HTTP.Client (HttpException)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (stderr)
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.Pandoc.Sources (Sources(..))
 import Text.Printf (printf)
-import Text.Parsec.Error
-import Text.Parsec.Pos hiding (Line)
 import Text.Pandoc.Shared (tshow)
 import Citeproc (CiteprocError, prettyCiteprocError)
 
@@ -43,7 +38,6 @@ data PandocError = PandocIOError Text IOError
                  | PandocShouldNeverHappenError Text
                  | PandocSomeError Text
                  | PandocParseError Text
-                 | PandocParsecError Sources ParseError
                  | PandocMakePDFError Text
                  | PandocOptionError Text
                  | PandocSyntaxMapError Text
@@ -53,16 +47,19 @@ data PandocError = PandocIOError Text IOError
                  | PandocXMLError Text Text
                  | PandocFilterError Text Text
                  | PandocLuaError Text
+                 | PandocNoScriptingEngine
                  | PandocCouldNotFindDataFileError Text
                  | PandocCouldNotFindMetadataFileError Text
                  | PandocResourceNotFound Text
                  | PandocTemplateError Text
+                 | PandocNoTemplateError Text
                  | PandocAppError Text
                  | PandocEpubSubdirectoryError Text
                  | PandocMacroLoop Text
                  | PandocUTF8DecodingError Text Int Word8
                  | PandocIpynbDecodingError Text
                  | PandocUnsupportedCharsetError Text
+                 | PandocFormatError Text Text
                  | PandocUnknownReaderError Text
                  | PandocUnknownWriterError Text
                  | PandocUnsupportedExtensionError Text Text
@@ -83,28 +80,6 @@ renderError e =
       "Please report this to pandoc's developers: " <> s
     PandocSomeError s -> s
     PandocParseError s -> s
-    PandocParsecError (Sources inputs) err' ->
-        let errPos = errorPos err'
-            errLine = sourceLine errPos
-            errColumn = sourceColumn errPos
-            errFile = sourceName errPos
-            errorInFile =
-              case sortOn (Down . sourceLine . fst)
-                      [ (pos,t)
-                        | (pos,t) <- inputs
-                        , sourceName pos == errFile
-                        , sourceLine pos <= errLine
-                      ] of
-                []  -> ""
-                ((pos,txt):_) ->
-                  let ls = T.lines txt <> [""]
-                      ln = (errLine - sourceLine pos) + 1
-                   in if length ls > ln && ln >= 1
-                         then T.concat ["\n", ls !! (ln - 1)
-                                       ,"\n", T.replicate (errColumn - 1) " "
-                                       ,"^"]
-                         else ""
-        in  "Error at " <> tshow  err' <> errorInFile
     PandocMakePDFError s -> s
     PandocOptionError s -> s
     PandocSyntaxMapError s -> s
@@ -117,6 +92,8 @@ renderError e =
     PandocFilterError filtername msg -> "Error running filter " <>
         filtername <> ":\n" <> msg
     PandocLuaError msg -> "Error running Lua:\n" <> msg
+    PandocNoScriptingEngine -> "This version of pandoc has been compiled " <>
+                               "without Lua support."
     PandocCouldNotFindDataFileError fn ->
         "Could not find data file " <> fn
     PandocCouldNotFindMetadataFileError fn ->
@@ -124,6 +101,7 @@ renderError e =
     PandocResourceNotFound fn ->
         "File " <> fn <> " not found in resource path"
     PandocTemplateError s -> "Error compiling template " <> s
+    PandocNoTemplateError fp -> "No template defined in " <> fp
     PandocAppError s -> s
     PandocEpubSubdirectoryError s ->
       "EPUB subdirectory name '" <> s <> "' contains illegal characters"
@@ -137,6 +115,8 @@ renderError e =
       "ipynb decoding error: " <> w
     PandocUnsupportedCharsetError charset ->
       "Unsupported charset " <> charset
+    PandocFormatError format s ->
+      "Error parsing format " <> tshow format <> ": " <> s
     PandocUnknownReaderError r ->
       "Unknown input format " <> r <>
       case r of
@@ -178,6 +158,7 @@ handleError (Left e) =
       PandocAppError{} -> 4
       PandocTemplateError{} -> 5
       PandocOptionError{} -> 6
+      PandocFormatError{} -> 20
       PandocUnknownReaderError{} -> 21
       PandocUnknownWriterError{} -> 22
       PandocUnsupportedExtensionError{} -> 23
@@ -191,11 +172,12 @@ handleError (Left e) =
       PandocShouldNeverHappenError{} -> 62
       PandocSomeError{} -> 63
       PandocParseError{} -> 64
-      PandocParsecError{} -> 65
       PandocMakePDFError{} -> 66
       PandocSyntaxMapError{} -> 67
       PandocFilterError{} -> 83
       PandocLuaError{} -> 84
+      PandocNoTemplateError{} -> 87
+      PandocNoScriptingEngine -> 89
       PandocMacroLoop{} -> 91
       PandocUTF8DecodingError{} -> 92
       PandocIpynbDecodingError{} -> 93

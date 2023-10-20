@@ -70,12 +70,16 @@ Metadata Values
 
     `cor-id`
     :   identifier linking to the contributor's correspondence
-        information. The info itself must be stored in as an item in
+        information. The info itself must be stored as an item in
         `article.author-notes.corresp`. If the `cor-id` value is
-        then, an [`<xref>`][elem:xref] link of
+        set, then an [`<xref>`][elem:xref] link of
         [`ref-type`][attr:ref-type] `corresp` is added. The
         [`rid`][attr:rid] attribute is set to `cor-<ID>`, where
         `<ID>` is the stringified value of this attribute.
+
+        Furthermore, the [`corresp`][attr:corresp] attribute on
+        the author's [`<contrib>`] element is set to `yes` if
+        this attribute is set to a truthy.
 
 `affiliation`
 :   the list of organizations with which contributors are
@@ -152,23 +156,30 @@ Metadata Values
         (if the latter is present).
 
 `copyright`
-:   Licensing and copyright information. This information is
+:   Copyright and licensing information. This information is
     rendered via the [`<permissions>`][elem:permissions] element.
 
-    The variables `type`, `link`, and `text` should always be used
-    together.
+    It is recommended to use the `license` field (described below)
+    for licensing information. If licensing information is
+    included below `copyright`, then the variables `type`, `link`,
+    and `text` should always be used together.
 
     `statement`
-    :   the year of copyright; used as content of the
-        [`<copyright-statement>`][elem:copyright-statement]
+    :   copyright notice or statement; used as content of the
+        [`<copyright-statement>`][elem:copyright-statement]. Use a
+        list for multiple statements.
 
     `year`
     :   the year of copyright; used as content of the
-        [`<copyright-year>`][elem:copyright-year]
+        [`<copyright-year>`][elem:copyright-year]. Use a list to
+        for multiple copyright years. The JATS documentation
+        states that this field need not to be used if the year is
+        included in the copyright statement.
 
     `holder`
     :   the copyright holder; included via the
-        [`<copyright-holder>`][elem:copyright-holder] element.
+        [`<copyright-holder>`][elem:copyright-holder] element. Use
+        a list for multiple copyright holders.
 
     `text`
     :   inline text setting the license under which the text is
@@ -343,6 +354,27 @@ Metadata Values
     :   place of publication. Used as the content of the
         [`<publisher-loc>`][elem:publisher-loc] element.
 
+`license`
+:   Article licensing information. Each item of this field is
+    rendered as a `<license>` element within the
+    [`<permissions>`][elem:permissions] element.
+
+    Item content should be either a single paragraph, or a map
+    with the fields listed below.
+
+    `text`
+    :   inline text describing a license under which the text is
+        published; included via the
+        [`<license-p>`][elem:copyright-holder] element.
+
+    `type`
+    :   type of the license; used as value of the
+        [`license-type`][attr:license-type] attribute.
+
+    `link`
+    :   external link describing the license; used as value of a
+        `xlink:href` attribute in the `<license>` element.
+
 `notes`
 :   Additional notes concerning the whole article. Added to the
     article's frontmatter via the [`<notes>`][elem:notes] element.
@@ -382,6 +414,7 @@ Required metadata values:
 [JATS]: https://jats.nlm.nih.gov/
 [Ringgold]: https://ringgold.com/
 [attr:content-type]: https://jats.nlm.nih.gov/publishing/tag-library/1.2/attribute/content-type.html
+[attr:corresp]: https://jats.nlm.nih.gov/publishing/tag-library/1.2/attribute/corresp.html
 [attr:date-type]: https://jats.nlm.nih.gov/publishing/tag-library/1.2/attribute/date-type.html
 [attr:equal-contrib]: https://jats.nlm.nih.gov/publishing/tag-library/1.2/attribute/equal-contrib.html
 [attr:fn-type]: https://jats.nlm.nih.gov/publishing/tag-library/1.2/attribute/fn-type.html

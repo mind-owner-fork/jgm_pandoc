@@ -2,9 +2,10 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE BangPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.Markdown
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -20,15 +21,17 @@ module Text.Pandoc.Writers.Markdown (
   writeCommonMark,
   writeMarkua,
   writePlain) where
-import Control.Monad.Reader
-import Control.Monad.State.Strict
+import Control.Monad (foldM, zipWithM, MonadPlus(..), when)
+import Control.Monad.Reader ( asks, MonadReader(local) )
+import Control.Monad.State.Strict ( gets, modify )
 import Data.Default
-import Data.List (intersperse, sortOn, transpose)
+import Data.List (intersperse, sortOn, union)
 import Data.List.NonEmpty (nonEmpty, NonEmpty(..))
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, mapMaybe, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.Char (isSpace)
 import qualified Data.Text as T
 import Text.HTML.TagSoup (Tag (..), isTagText, parseTags)
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
@@ -43,10 +46,11 @@ import Text.Pandoc.Templates (renderTemplate)
 import Text.DocTemplates (Val(..), Context(..), FromContext(..))
 import Text.Pandoc.Walk
 import Text.Pandoc.Writers.HTML (writeHtml5String)
-import Text.Pandoc.Writers.Markdown.Inline (inlineListToMarkdown, 
-                                            linkAttributes, 
-                                            attrsToMarkdown, 
+import Text.Pandoc.Writers.Markdown.Inline (inlineListToMarkdown,
+                                            linkAttributes,
+                                            attrsToMarkdown,
                                             attrsToMarkua)
+import Text.Pandoc.Writers.Markdown.Table (pipeTable, pandocTable)
 import Text.Pandoc.Writers.Markdown.Types (MarkdownVariant(..),
                                            WriterState(..),
                                            WriterEnv(..),
@@ -79,14 +83,18 @@ writeCommonMark opts document =
                    -- properly.
                    enableExtension Ext_all_symbols_escapable $
                    enableExtension Ext_intraword_underscores $
-                     writerExtensions opts }
+                     writerExtensions opts ,
+                writerWrapText =
+                  if isEnabled Ext_hard_line_breaks opts
+                     then WrapNone
+                     else writerWrapText opts }
 
 -- | Convert Pandoc to Markua.
 writeMarkua :: PandocMonad m => WriterOptions -> Pandoc -> m Text
 writeMarkua opts document =
   evalMD (pandocToMarkdown opts' document) def{ envVariant = Markua } def
  where
-  opts' = opts{   writerExtensions =
+  opts' = opts{ writerExtensions =
                   enableExtension Ext_hard_line_breaks $
                   enableExtension Ext_pipe_tables $
                   -- required for fancy list enumerators
@@ -98,7 +106,11 @@ writeMarkua opts document =
                   enableExtension Ext_definition_lists $
                   enableExtension Ext_smart $
                   enableExtension Ext_footnotes
-                    mempty }
+                    mempty ,
+                writerWrapText =
+                  if isEnabled Ext_hard_line_breaks opts
+                     then WrapNone
+                     else writerWrapText opts }
 
 
 pandocTitleBlock :: Doc Text -> [Doc Text] -> Doc Text -> Doc Text
@@ -221,8 +233,14 @@ pandocToMarkdown opts (Pandoc meta blocks) = do
                                    mmdTitleBlock metadata
                                | otherwise -> empty
                         Nothing -> empty
+  let modifyTOC =
+        if isEnabled Ext_link_attributes opts || isEnabled Ext_attributes opts
+        then id
+        else walk $ \inln -> case inln of
+          Link _attr contents tgt -> Link nullAttr contents tgt
+          _                       -> inln
   toc <- if writerTableOfContents opts
-         then blockToMarkdown opts ( toTableOfContents opts blocks )
+         then blockToMarkdown opts . modifyTOC $ toTableOfContents opts blocks
          else return mempty
   -- Strip off final 'references' header if markdown citations enabled
   let blocks' = if isEnabled Ext_citations opts
@@ -295,12 +313,12 @@ noteToMarkdown opts num blocks = do
 
 -- | (Code) blocks with a single class and no attributes can just use it
 -- standalone, no need to bother with curly braces.
-classOrAttrsToMarkdown :: Attr -> Doc Text
-classOrAttrsToMarkdown ("",[cls],[]) = literal cls
-classOrAttrsToMarkdown attrs = attrsToMarkdown attrs
+classOrAttrsToMarkdown :: WriterOptions -> Attr -> Doc Text
+classOrAttrsToMarkdown _ ("",[cls],[]) = literal cls
+classOrAttrsToMarkdown opts attrs = attrsToMarkdown opts attrs
 
 -- | Ordered list start parser for use in Para below.
-olMarker :: Parser Text ParserState ()
+olMarker :: Parsec Text ParserState ()
 olMarker = do (start, style', delim) <- anyOrderedListMarker
               if delim == Period &&
                           (style' == UpperAlpha || (style' == UpperRoman &&
@@ -350,13 +368,12 @@ blockToMarkdown' :: PandocMonad m
                  => WriterOptions -- ^ Options
                  -> Block         -- ^ Block element
                  -> MD m (Doc Text)
-blockToMarkdown' _ Null = return empty
 blockToMarkdown' opts (Div attrs ils) = do
   contents <- blockListToMarkdown opts ils
   variant <- asks envVariant
   return $
      case () of
-         _ | variant == Markua -> 
+         _ | variant == Markua ->
                    case () of
                         () | "blurb" `elem` classes' -> prefixed "B> " contents <> blankline
                            | "aside" `elem` classes' -> prefixed "A> " contents <> blankline
@@ -366,8 +383,8 @@ blockToMarkdown' opts (Div attrs ils) = do
            | isEnabled Ext_fenced_divs opts &&
              attrs /= nullAttr ->
                 let attrsToMd = if variant == Commonmark
-                                then attrsToMarkdown
-                                else classOrAttrsToMarkdown
+                                then attrsToMarkdown opts
+                                else classOrAttrsToMarkdown opts
                 in nowrap (literal ":::" <+> attrsToMd attrs) $$
                    chomp contents $$
                    literal ":::" <> blankline
@@ -387,7 +404,7 @@ blockToMarkdown' opts (Div attrs ils) = do
 blockToMarkdown' opts (Plain inlines) = do
   -- escape if para starts with ordered list marker
   variant <- asks envVariant
-  let escapeMarker = T.concatMap $ \x -> if x `elemText` ".()"
+  let escapeMarker = T.concatMap $ \x -> if T.any (== x) ".()"
                                          then T.pack ['\\', x]
                                          else T.singleton x
   let startsWithSpace (Space:_)     = True
@@ -409,14 +426,6 @@ blockToMarkdown' opts (Plain inlines) = do
                   _ -> inlines
   contents <- inlineListToMarkdown opts inlines'
   return $ contents <> cr
-blockToMarkdown' opts (SimpleFigure attr alt (src, tit))
-  | isEnabled Ext_raw_html opts &&
-    not (isEnabled Ext_link_attributes opts || isEnabled Ext_attributes opts) &&
-    attr /= nullAttr = -- use raw HTML
-    (<> blankline) . literal . T.strip <$>
-      writeHtml5String opts{ writerTemplate = Nothing }
-        (Pandoc nullMeta [SimpleFigure attr alt (src, tit)])
-  | otherwise = blockToMarkdown opts (Para [Image attr alt (src,tit)])
 blockToMarkdown' opts (Para inlines) =
   (<> blankline) `fmap` blockToMarkdown opts (Plain inlines)
 blockToMarkdown' opts (LineBlock lns) =
@@ -439,6 +448,8 @@ blockToMarkdown' opts b@(RawBlock f str) = do
     Commonmark
       | f `elem` ["gfm", "commonmark", "commonmark_x", "markdown"]
          -> return $ literal str <> literal "\n"
+      | f `elem` ["html", "html5", "html4"]
+         -> return $ literal (removeBlankLinesInHTML str) <> literal "\n"
     Markdown
       | f `elem` ["markdown", "markdown_github", "markdown_phpextra",
                   "markdown_mmd", "markdown_strict"]
@@ -470,20 +481,22 @@ blockToMarkdown' opts (Header level attr inlines) = do
           else return empty
   variant <- asks envVariant
   -- we calculate the id that would be used by auto_identifiers
+  -- or gfm_auto_identifiers
   -- so we know whether to print an explicit identifier
   ids <- gets stIds
   let autoId = uniqueIdent (writerExtensions opts) inlines ids
   modify $ \st -> st{ stIds = Set.insert autoId ids }
   let attr' = case attr of
                    ("",[],[]) -> empty
-                   (id',[],[]) | isEnabled Ext_auto_identifiers opts
+                   (id',[],[]) | (isEnabled Ext_auto_identifiers opts
+                                  || isEnabled Ext_gfm_auto_identifiers opts)
                                  && id' == autoId -> empty
                    (id',_,_)   | isEnabled Ext_mmd_header_identifiers opts ->
                                     space <> brackets (literal id')
-                   _ | variant == Markua -> attrsToMarkua attr
+                   _ | variant == Markua -> attrsToMarkua opts attr
                      | isEnabled Ext_header_attributes opts ||
                        isEnabled Ext_attributes opts ->
-                                    space <> attrsToMarkdown attr
+                                    space <> attrsToMarkdown opts attr
                      | otherwise -> empty
   contents <- inlineListToMarkdown opts $
                  -- ensure no newlines; see #3736
@@ -515,7 +528,7 @@ blockToMarkdown' opts (Header level attr inlines) = do
             -- ghc interprets '#' characters in column 1 as linenum specifiers.
             _ | variant == PlainText || isEnabled Ext_literate_haskell opts ->
                 contents <> blankline
-            _ | variant == Markua -> attr' <> cr <> literal (T.replicate level "#") 
+            _ | variant == Markua -> attr' <> cr <> literal (T.replicate level "#")
                                         <> space <> contents <> blankline
             _ -> literal (T.replicate level "#") <> space <> contents <> attr' <> blankline
 
@@ -533,7 +546,7 @@ blockToMarkdown' opts (CodeBlock attribs str) = do
           backticks <> attrs <> cr <> literal str <> cr <> backticks <> blankline
            | isEnabled Ext_fenced_code_blocks opts ->
           tildes <> attrs <> cr <> literal str <> cr <> tildes <> blankline
-     _ | variant == Markua -> blankline <> attrsToMarkua attribs <> cr <> backticks <> cr <> 
+     _ | variant == Markua -> blankline <> attrsToMarkua opts attribs <> cr <> backticks <> cr <>
                                 literal str <> cr <> backticks <> cr <> blankline
        | otherwise -> nest (writerTabStop opts) (literal str) <> blankline
    where
@@ -547,7 +560,7 @@ blockToMarkdown' opts (CodeBlock attribs str) = do
      tildes = endline '~'
      attrs  = if isEnabled Ext_fenced_code_attributes opts ||
                  isEnabled Ext_attributes opts
-                 then nowrap $ " " <> classOrAttrsToMarkdown attribs
+                 then nowrap $ " " <> classOrAttrsToMarkdown opts attribs
                  else case attribs of
                             (_,cls:_,_) -> " " <> literal cls
                             _             -> empty
@@ -620,13 +633,13 @@ blockToMarkdown' opts t@(Table _ blkCapt specs thead tbody tfoot) = do
                 (id,) <$> pipeTable opts (all null headers) aligns' widths'
                            rawHeaders rawRows
             | isEnabled Ext_raw_html opts -> fmap (id,) $
-                   literal <$>
+                   literal . removeBlankLinesInHTML <$>
                    writeHtml5String opts{ writerTemplate = Nothing } (Pandoc nullMeta [t])
             | otherwise -> return (id, literal "[TABLE]")
   return $ nst (tbl $$ caption'') $$ blankline
 blockToMarkdown' opts (BulletList items) = do
   contents <- inList $ mapM (bulletListItemToMarkdown opts) items
-  return $ (if isTightList items then vcat else vsep) 
+  return $ (if isTightList items then vcat else vsep)
                   contents <> blankline
 blockToMarkdown' opts (OrderedList (start,sty,delim) items) = do
   variant <- asks envVariant
@@ -635,7 +648,7 @@ blockToMarkdown' opts (OrderedList (start,sty,delim) items) = do
                   else 1
   let sty'   = if isEnabled Ext_fancy_lists opts then sty else DefaultStyle
   let delim' | isEnabled Ext_fancy_lists opts =
-               case variant of 
+               case variant of
                    -- Markua supports 'fancy' enumerators, but no TwoParens
                    Markua -> if delim == TwoParens then OneParen else delim
                    _ -> delim
@@ -655,6 +668,33 @@ blockToMarkdown' opts (OrderedList (start,sty,delim) items) = do
 blockToMarkdown' opts (DefinitionList items) = do
   contents <- inList $ mapM (definitionListItemToMarkdown opts) items
   return $ mconcat contents <> blankline
+blockToMarkdown' opts (Figure figattr capt body) = do
+  let combinedAttr imgattr = case imgattr of
+        ("", cls, kv) | (figid, [], []) <- figattr -> Just (figid, cls, kv)
+        _ -> Nothing
+  let combinedAlt alt = case capt of
+        Caption Nothing [] -> if null alt
+                              then Just [Str "image"]
+                              else Just alt
+        Caption Nothing [Plain captInlines]
+          | captInlines == alt || null alt -> Just captInlines
+        _ -> Nothing
+  case body of
+    [Plain [Image imgAttr alt (src, ttl)]]
+      | isEnabled Ext_implicit_figures opts
+      , Just descr    <- combinedAlt alt
+      , Just imgAttr' <- combinedAttr imgAttr
+      , isEnabled Ext_link_attributes opts || imgAttr' == nullAttr
+        -> do
+          -- use implicit figures if possible
+          let tgt' = (src, fromMaybe ttl $ T.stripPrefix "fig:" ttl)
+          contents <- inlineListToMarkdown opts [Image imgAttr' descr tgt']
+          return $ contents <> blankline
+    _ ->
+      -- fallback to raw html if possible or div otherwise
+      if isEnabled Ext_raw_html opts
+      then figureToMarkdown opts figattr capt body
+      else blockToMarkdown' opts $ figureDiv figattr capt body
 
 inList :: Monad m => MD m a -> MD m a
 inList p = local (\env -> env {envInList = True}) p
@@ -668,101 +708,21 @@ addMarkdownAttribute s =
                                  x /= "markdown"]
        _ -> s
 
-pipeTable :: PandocMonad m
-          => WriterOptions
-          -> Bool -> [Alignment] -> [Double] -> [Doc Text] -> [[Doc Text]]
-          -> MD m (Doc Text)
-pipeTable opts headless aligns widths rawHeaders rawRows = do
-  let sp = literal " "
-  let blockFor AlignLeft   x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
-      blockFor AlignCenter x y = cblock (x + 2) (sp <> y <> sp) <> lblock 0 empty
-      blockFor AlignRight  x y = rblock (x + 2) (y <> sp) <> lblock 0 empty
-      blockFor _           x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
-  let contentWidths = map (max 3 . maybe 3 maximum . nonEmpty . map offset) $
-                       transpose (rawHeaders : rawRows)
-  let colwidth = writerColumns opts
-  let numcols = length contentWidths
-  let maxwidth = sum contentWidths
-  variant <- asks envVariant
-  let pipeWidths = if variant == Markdown &&
-                      not (all (== 0) widths) &&
-                      maxwidth + (numcols + 1) > colwidth
-                      then map
-                            (floor . (* fromIntegral (colwidth - (numcols +1))))
-                            widths
-                      else contentWidths
-  let torow cs = nowrap $ literal "|" <>
-                    hcat (intersperse (literal "|") $
-                          zipWith3 blockFor aligns contentWidths (map chomp cs))
-                    <> literal "|"
-  let toborder a w = literal $ case a of
-                          AlignLeft    -> ":" <> T.replicate (w + 1) "-"
-                          AlignCenter  -> ":" <> T.replicate w "-" <> ":"
-                          AlignRight   -> T.replicate (w + 1) "-" <> ":"
-                          AlignDefault -> T.replicate (w + 2) "-"
-  -- note:  pipe tables can't completely lack a
-  -- header; for a headerless table, we need a header of empty cells.
-  -- see jgm/pandoc#1996.
-  let header = if headless
-                  then torow (replicate (length aligns) empty)
-                  else torow rawHeaders
-  let border = nowrap $ literal "|" <> hcat (intersperse (literal "|") $
-                        zipWith toborder aligns pipeWidths) <> literal "|"
-  let body   = vcat $ map torow rawRows
-  return $ header $$ border $$ body
-
-pandocTable :: PandocMonad m
-            => WriterOptions -> Bool -> Bool -> [Alignment] -> [Double]
-            -> [Doc Text] -> [[Doc Text]] -> MD m (Doc Text)
-pandocTable opts multiline headless aligns widths rawHeaders rawRows = do
-  let isSimple = all (==0) widths
-  let alignHeader alignment = case alignment of
-                                AlignLeft    -> lblock
-                                AlignCenter  -> cblock
-                                AlignRight   -> rblock
-                                AlignDefault -> lblock
-  -- Number of characters per column necessary to output every cell
-  -- without requiring a line break.
-  -- The @+2@ is needed for specifying the alignment.
-  let numChars    = (+ 2) . maybe 0 maximum . nonEmpty . map offset
-  -- Number of characters per column necessary to output every cell
-  -- without requiring a line break *inside a word*.
-  -- The @+2@ is needed for specifying the alignment.
-  let minNumChars = (+ 2) . maybe 0 maximum . nonEmpty . map minOffset
-  let columns = transpose (rawHeaders : rawRows)
-  -- minimal column width without wrapping a single word
-  let relWidth w col =
-         max (floor $ fromIntegral (writerColumns opts - 1) * w)
-             (if writerWrapText opts == WrapAuto
-                 then minNumChars col
-                 else numChars col)
-  let widthsInChars
-        | isSimple  = map numChars columns
-        | otherwise = zipWith relWidth widths columns
-  let makeRow = hcat . intersperse (lblock 1 (literal " ")) .
-                   zipWith3 alignHeader aligns widthsInChars
-  let rows' = map makeRow rawRows
-  let head' = makeRow rawHeaders
-  let underline = mconcat $ intersperse (literal " ") $
-                  map (\width -> literal (T.replicate width "-")) widthsInChars
-  let border
-        | multiline = literal (T.replicate (sum widthsInChars +
-                        length widthsInChars - 1) "-")
-        | headless  = underline
-        | otherwise = empty
-  let head'' = if headless
-                  then empty
-                  else border <> cr <> head'
-  let body = if multiline
-                then vsep rows' $$
-                     if length rows' < 2
-                        then blankline -- #4578
-                        else empty
-                else vcat rows'
-  let bottom = if headless
-                  then underline
-                  else border
-  return $ head'' $$ underline $$ body $$ bottom
+-- | Converts a figure to Markdown by wrapping it in a div named `figure`.
+figureToMarkdown :: PandocMonad m
+                 => WriterOptions
+                 -> Attr
+                 -> Caption
+                 -> [Block]
+                 -> MD m (Doc Text)
+figureToMarkdown opts attr@(ident, classes, kvs) capt body
+  | isEnabled Ext_raw_html opts =
+      (<> blankline) . literal . T.strip <$>
+      writeHtml5String
+        opts{ writerTemplate = Nothing }
+        (Pandoc nullMeta [Figure attr capt body])
+  | otherwise = let attr' = (ident, ["figure"] `union` classes, kvs)
+                in blockToMarkdown' opts (Div attr' body)
 
 itemEndsWithTightList :: [Block] -> Bool
 itemEndsWithTightList bs =
@@ -777,15 +737,15 @@ bulletListItemToMarkdown opts bs = do
   variant <- asks envVariant
   let exts = writerExtensions opts
   contents <- blockListToMarkdown opts $ taskListItemToAscii exts bs
-  let sps = T.replicate (writerTabStop opts - 2) " "
   let start = case variant of
-              Markua -> literal "* "
-              _      -> literal $ "- " <> sps
+              Markua -> "* "
+              Commonmark -> "- "
+              _ -> "- " <> T.replicate (writerTabStop opts - 2) " "
   -- remove trailing blank line if item ends with a tight list
   let contents' = if itemEndsWithTightList bs
                      then chomp contents <> cr
                      else contents
-  return $ hang (writerTabStop opts) start contents'
+  return $ hang (T.length start) (literal start) contents'
 
 -- | Convert ordered list item (a list of blocks) to markdown.
 orderedListItemToMarkdown :: PandocMonad m
@@ -897,8 +857,8 @@ blockListToMarkdown opts blocks = do
       isListBlock (DefinitionList _) = True
       isListBlock _                  = False
       commentSep
-        | variant == PlainText        = Null
-        | variant == Markua           = Null
+        | variant == PlainText        = Plain []
+        | variant == Markua           = Plain []
         | isEnabled Ext_raw_html opts = RawBlock "html" "<!-- -->\n"
         | otherwise                   = RawBlock "markdown" "&nbsp;\n"
   mconcat <$> mapM (blockToMarkdown opts) (fixBlocks blocks)
@@ -907,3 +867,12 @@ lineBreakToSpace :: Inline -> Inline
 lineBreakToSpace LineBreak = Space
 lineBreakToSpace SoftBreak = Space
 lineBreakToSpace x         = x
+
+removeBlankLinesInHTML :: Text -> Text
+removeBlankLinesInHTML = T.pack . go False . T.unpack
+  where go _ [] = []
+        go True ('\n':cs) = "&#10;" <> go False cs
+        go False ('\n':cs) = '\n' : go True cs
+        go !afternewline (!c:cs)
+          | isSpace c = c : go afternewline cs
+          | otherwise = c : go False cs

@@ -2,7 +2,7 @@
 {- |
    Module      : Text.Pandoc.Readers.Docx.StyleMaps
    Copyright   : © 2014-2020 Jesse Rosenthal <jrosenthal@jhu.edu>,
-                   2014-2022 John MacFarlane <jgm@berkeley.edu>,
+                   2014-2023 John MacFarlane <jgm@berkeley.edu>,
                    2015 Nikolay Yakimov <root@livid.pp.ru>
    License     : GNU GPL, version 2 or above
 
@@ -67,4 +67,3 @@ findAttrByName :: NameSpaces -> Text -> Text -> Element -> Maybe Text
 findAttrByName ns pref name el =
   let ns' = ns <> elemToNameSpaces el
   in  findAttr (elemName ns' pref name) el
-

@@ -5,9 +5,10 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE TypeApplications    #-}
 {- |
    Module      : Text.Pandoc.Writers.Docx
-   Copyright   : Copyright (C) 2012-2022 John MacFarlane
+   Copyright   : Copyright (C) 2012-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -18,11 +19,22 @@ Conversion of 'Pandoc' documents to docx.
 -}
 module Text.Pandoc.Writers.Docx ( writeDocx ) where
 import Codec.Archive.Zip
+    ( Archive(zEntries),
+      addEntryToArchive,
+      emptyArchive,
+      findEntryByPath,
+      fromArchive,
+      toArchive,
+      toEntry,
+      Entry(eRelativePath) )
 import Control.Applicative ((<|>))
+import Control.Monad (MonadPlus(mplus), unless, when)
 import Control.Monad.Except (catchError, throwError)
 import Control.Monad.Reader
-import Control.Monad.State.Strict
+    ( asks, MonadReader(local), MonadTrans(lift), ReaderT(runReaderT) )
+import Control.Monad.State.Strict ( StateT(runStateT), gets, modify )
 import qualified Data.ByteString.Lazy as BL
+import Data.Containers.ListUtils (nubOrd)
 import Data.Char (isSpace, isLetter)
 import Data.List (intercalate, isPrefixOf, isSuffixOf)
 import Data.String (fromString)
@@ -35,12 +47,12 @@ import qualified Data.Text.Lazy as TL
 import Data.Time.Clock.POSIX
 import Data.Digest.Pure.SHA (sha1, showDigest)
 import Skylighting
-import Text.Collate.Lang (renderLang)
-import Text.Pandoc.Class (PandocMonad, report, toLang, translateTerm,
-                           getMediaBag)
+import Text.Pandoc.Class (PandocMonad, report, toLang, getMediaBag)
+import Text.Pandoc.Translations (Term(Abstract), translateTerm)
 import Text.Pandoc.MediaBag (lookupMedia, MediaItem(..))
 import qualified Text.Pandoc.Translations as Term
 import qualified Text.Pandoc.Class.PandocMonad as P
+import Text.Pandoc.Data (readDataFile, readDefaultDataFile)
 import Data.Time
 import Text.Pandoc.UTF8 (fromTextLazy)
 import Text.Pandoc.Definition
@@ -52,7 +64,7 @@ import Text.Pandoc.Logging
 import Text.Pandoc.MIME (extensionFromMimeType, getMimeType, getMimeTypeDef)
 import Text.Pandoc.Options
 import Text.Pandoc.Writers.Docx.StyleMap
-import Text.Pandoc.Writers.Docx.Table
+import Text.Pandoc.Writers.Docx.Table as Table
 import Text.Pandoc.Writers.Docx.Types
 import Text.Pandoc.Shared
 import Text.Pandoc.Walk
@@ -63,6 +75,7 @@ import Text.TeXMath
 import Text.Pandoc.Writers.OOXML
 import Text.Pandoc.XML.Light as XML
 import Data.Generics (mkT, everywhere)
+import Text.Collate.Lang (renderLang, Lang(..))
 
 squashProps :: EnvProps -> [Element]
 squashProps (EnvProps Nothing es) = es
@@ -111,6 +124,7 @@ writeDocx :: (PandocMonad m)
           -> m BL.ByteString
 writeDocx opts doc = do
   let Pandoc meta blocks = walk fixDisplayMath doc
+  setupTranslations meta
   let blocks' = makeSections True Nothing blocks
   let doc' = Pandoc meta blocks'
 
@@ -118,13 +132,14 @@ writeDocx opts doc = do
   utctime <- P.getTimestamp
   oldUserDataDir <- P.getUserDataDir
   P.setUserDataDir Nothing
-  res <- P.readDefaultDataFile "reference.docx"
+  res <- readDefaultDataFile "reference.docx"
   P.setUserDataDir oldUserDataDir
   let distArchive = toArchive $ BL.fromStrict res
   refArchive <- case writerReferenceDoc opts of
-                     Just f  -> toArchive <$> P.readFileLazy f
+                     Just f  -> toArchive . BL.fromStrict . fst
+                                   <$> P.fetchItem (T.pack f)
                      Nothing -> toArchive . BL.fromStrict <$>
-                        P.readDataFile "reference.docx"
+                          readDataFile "reference.docx"
 
   parsedDoc <- parseXml refArchive distArchive "word/document.xml"
   let wname f qn = qPrefix qn == Just "w" && f (qName qn)
@@ -153,16 +168,33 @@ writeDocx opts doc = do
   let addLang :: Element -> Element
       addLang = case mblang of
                   Nothing -> id
-                  Just l  -> everywhere (mkT (go (renderLang l)))
+                  Just l  -> everywhere (mkT (go l))
         where
-          go :: Text -> Element -> Element
-          go l e'
-            | qName (elName e') == "lang"
-                = e'{ elAttribs = map (setvalattr l) $ elAttribs e' }
-            | otherwise = e'
+          go :: Lang -> Element -> Element
+          go lang e'
+           | qName (elName e') == "lang"
+             = if isEastAsianLang lang
+                  then e'{ elAttribs =
+                             map (setattr "eastAsia" (renderLang lang)) $
+                             elAttribs e' }
+                  else
+                    if isBidiLang lang
+                       then e'{ elAttribs =
+                                 map (setattr "bidi" (renderLang lang)) $
+                                 elAttribs e' }
+                       else e'{ elAttribs =
+                                 map (setattr "val" (renderLang lang)) $
+                                 elAttribs e' }
+           | otherwise = e'
 
-          setvalattr l (XML.Attr qn@(QName "val" _ _) _) = XML.Attr qn l
-          setvalattr _ x                                 = x
+          setattr attrname l (XML.Attr qn@(QName s _ _) _)
+            | s == attrname  = XML.Attr qn l
+          setattr _ _ x      = x
+
+          isEastAsianLang Lang{ langLanguage = lang } =
+             lang == "zh" || lang == "jp" || lang == "ko"
+          isBidiLang Lang{ langLanguage = lang } =
+             lang == "he" || lang == "ar"
 
   let stylepath = "word/styles.xml"
   styledoc <- addLang <$> parseXml refArchive distArchive stylepath
@@ -474,6 +506,7 @@ writeDocx opts doc = do
   -- we do, however, copy some settings over from reference
   let settingsPath = "word/settings.xml"
       settingsList = [ "zoom"
+                     , "mirrorMargins"
                      , "embedSystemFonts"
                      , "doNotTrackMoves"
                      , "defaultTabStop"
@@ -615,7 +648,7 @@ baseListId = 1000
 mkNumbering :: [ListMarker] -> [Element]
 mkNumbering lists =
   elts ++ zipWith mkNum lists [baseListId..(baseListId + length lists - 1)]
-    where elts = map mkAbstractNum (ordNub lists)
+    where elts = map mkAbstractNum (nubOrd lists)
 
 maxListLevel :: Int
 maxListLevel = 8
@@ -736,7 +769,19 @@ writeOpenXML opts (Pandoc meta blocks) = do
   date <- withParaPropM (pStyleM "Date") $ blocksToOpenXML opts [Para dat | not (null dat)]
   abstract <- if null abstract'
                  then return []
-                 else withParaPropM (pStyleM "Abstract") $ blocksToOpenXML opts abstract'
+                 else do
+                   abstractTitle <- case lookupMeta "abstract-title" meta of
+                       Just (MetaBlocks bs)   -> pure $ stringify bs
+                       Just (MetaInlines ils) -> pure $ stringify ils
+                       Just (MetaString s)    -> pure s
+                       _                      -> translateTerm Abstract
+                   abstractTit <- withParaPropM (pStyleM "AbstractTitle") $
+                                   blocksToOpenXML opts
+                                     [Para [Str abstractTitle]]
+                   abstractContents <- withParaPropM (pStyleM "Abstract") $
+                                         blocksToOpenXML opts abstract'
+                   return $ abstractTit <> abstractContents
+
   let convertSpace (Str x : Space : Str y : xs) = Str (x <> " " <> y) : xs
       convertSpace (Str x : Str y : xs)         = Str (x <> y) : xs
       convertSpace xs                           = xs
@@ -804,7 +849,6 @@ blockToOpenXML :: (PandocMonad m) => WriterOptions -> Block -> WS m [Content]
 blockToOpenXML opts blk = withDirection $ blockToOpenXML' opts blk
 
 blockToOpenXML' :: (PandocMonad m) => WriterOptions -> Block -> WS m [Content]
-blockToOpenXML' _ Null = return []
 blockToOpenXML' opts (Div (ident,_classes,kvs) bs) = do
   stylemod <- case lookup dynamicStyleKey kvs of
                    Just (fromString . T.unpack -> sty) -> do
@@ -823,8 +867,11 @@ blockToOpenXML' opts (Div (ident,_classes,kvs) bs) = do
   let bibmod = if ident == "refs"
                   then withParaPropM (pStyleM "Bibliography")
                   else id
+  let langmod = case lookup "lang" kvs of
+                  Nothing -> id
+                  Just lang -> local (\env -> env{envLang = Just lang})
   header <- dirmod $ stylemod $ blocksToOpenXML opts hs
-  contents <- dirmod $ bibmod $ stylemod $ blocksToOpenXML opts bs'
+  contents <- dirmod $ bibmod $ stylemod $ langmod $ blocksToOpenXML opts bs'
   wrapBookmark ident $ header <> contents
 blockToOpenXML' opts (Header lev (ident,_,kvs) lst) = do
   setFirstPara
@@ -857,38 +904,6 @@ blockToOpenXML' opts (Plain lst) = do
   if isInTable || isInList
      then withParaProp prop block
      else block
--- title beginning with fig: indicates that the image is a figure
-blockToOpenXML' opts (SimpleFigure attr@(imgident, _, _) alt (src, tit)) = do
-  setFirstPara
-  fignum <- gets stNextFigureNum
-  unless (null alt) $ modify $ \st -> st{ stNextFigureNum = fignum + 1 }
-  let refid = if T.null imgident
-                     then "ref_fig" <> tshow fignum
-                     else "ref_" <> imgident
-  figname <- translateTerm Term.Figure
-  prop <- pStyleM $
-        if null alt
-        then "Figure"
-        else "Captioned Figure"
-  paraProps <- local (\env -> env { envParaProperties = EnvProps (Just prop) [] <> envParaProperties env }) (getParaProps False)
-  contents <- inlinesToOpenXML opts [Image attr alt (src,tit)]
-  captionNode <- if null alt
-                    then return []
-                    else withParaPropM (pStyleM "Image Caption")
-                         $ blockToOpenXML opts
-                         $ Para
-                         $ if isEnabled Ext_native_numbering opts
-                              then Span (refid,[],[])
-                                          [Str (figname <> "\160"),
-                                           RawInline (Format "openxml")
-                                           ("<w:fldSimple w:instr=\"SEQ Figure"
-                                           <> " \\* ARABIC \"><w:r><w:t>"
-                                           <> tshow fignum
-                                           <> "</w:t></w:r></w:fldSimple>")] : Str ": " : alt
-                              else alt
-  return $
-    Elem (mknode "w:p" [] (map Elem paraProps ++ contents))
-    : captionNode
 blockToOpenXML' opts (Para lst)
   | null lst && not (isEnabled Ext_empty_paragraphs opts) = return []
   | otherwise = do
@@ -930,10 +945,15 @@ blockToOpenXML' _ HorizontalRule = do
     $ mknode "v:rect" [("style","width:0;height:1.5pt"),
                        ("o:hralign","center"),
                        ("o:hrstd","t"),("o:hr","t")] () ]
-blockToOpenXML' opts (Table attr caption colspecs thead tbodies tfoot) =
-  tableToOpenXML opts
-                 (blocksToOpenXML opts)
+blockToOpenXML' opts (Table attr caption colspecs thead tbodies tfoot) = do
+  -- Remove extra paragraph indentation due to list items (#5947).
+  -- This means that tables in lists will not be indented, but it
+  -- avoids unwanted indentation in each cell.
+  content <- tableToOpenXML opts
+              (local (\env -> env{ envListLevel = -1 }) . blocksToOpenXML opts)
                  (Grid.toTable attr caption colspecs thead tbodies tfoot)
+  let (tableId, _, _) = attr
+  wrapBookmark tableId content
 blockToOpenXML' opts el
   | BulletList lst <- el = addOpenXMLList BulletMarker lst
   | OrderedList (start, numstyle, numdelim) lst <- el
@@ -952,6 +972,99 @@ blockToOpenXML' opts (DefinitionList items) = do
   l <- concat `fmap` mapM (definitionListItemToOpenXML opts) items
   setFirstPara
   return l
+blockToOpenXML' opts (Figure (ident, _, _) (Caption _ longcapt) body) = do
+  setFirstPara
+  fignum <- gets stNextFigureNum
+  unless (null longcapt) $ modify $ \st -> st{ stNextFigureNum = fignum + 1 }
+  let refid = if T.null ident
+              then "ref_fig" <> tshow fignum
+              else "ref_" <> ident
+  figname <- translateTerm Term.Figure
+  prop <- pStyleM $
+    if null longcapt
+    then "Figure"
+    else "Captioned Figure"
+  paraProps <- local
+    (\env -> env { envParaProperties = EnvProps (Just prop) [] <>
+                                       envParaProperties env })
+    (getParaProps False)
+
+  -- Figure contents
+  let simpleImage x = do
+        imgXML <- inlineToOpenXML opts x
+        pure $ Elem (mknode "w:p" [] (map Elem paraProps ++ imgXML))
+  contentsNode <- case body of
+    [Plain [img@Image {}]] -> simpleImage img
+    [Para  [img@Image {}]] -> simpleImage img
+    _                      -> toFigureTable opts body
+  -- Caption
+  let imageCaption = withParaPropM (pStyleM "Image Caption")
+                   . blocksToOpenXML opts
+  let fstCaptionPara inlns = Para $
+        if not $ isEnabled Ext_native_numbering opts
+        then inlns
+        else let rawfld = RawInline (Format "openxml") $ mconcat
+                          [ "<w:fldSimple w:instr=\"SEQ Figure"
+                          , " \\* ARABIC \"><w:r><w:t>"
+                          , tshow fignum
+                          , "</w:t></w:r></w:fldSimple>"
+                          ]
+             in Span (refid,[],[]) [Str (figname <> "\160") , rawfld]
+                : Str ": " : inlns
+  captionNode <- case longcapt of
+    []              -> return []
+    (Para xs  : bs) -> imageCaption (fstCaptionPara xs : bs)
+    (Plain xs : bs) -> imageCaption (fstCaptionPara xs : bs)
+    _               -> imageCaption longcapt
+  return $ contentsNode : captionNode
+
+toFigureTable :: PandocMonad m
+              => WriterOptions -> [Block] -> WS m Content
+toFigureTable opts blks = do
+  modify $ \s -> s { stInTable = True }
+  let ncols = length blks
+  let textwidth = 7920  -- 5.5 in in twips       (1 twip == 1/20 pt)
+  let cellfrac = 1 / fromIntegral ncols
+  let colwidth = tshow @Integer $ floor (textwidth * cellfrac) -- twips
+  let gridCols = replicate ncols $ mknode "w:gridCol" [("w:w", colwidth)] ()
+  let scaleImage = \case
+        Image attr@(ident, classes, attribs) alt tgt ->
+          let dimWidth  = case dimension Width attr of
+                            Nothing -> Percent (cellfrac * 100)
+                            Just d  -> scaleDimension cellfrac d
+              dimHeight = scaleDimension cellfrac <$> dimension Height attr
+              attribs' = (tshow Width, tshow dimWidth) :
+                         (case dimHeight of
+                            Nothing -> id
+                            Just h  -> ((tshow Height, tshow h) :))
+                         [ (k, v) | (k, v) <- attribs
+                                  , k `notElem` ["width", "height"]
+                                  ]
+          in Image (ident, classes, attribs') alt tgt
+        x -> x
+  let blockToCell = Table.OOXMLCell nullAttr AlignCenter 1 1 . (:[])
+                  . walk scaleImage
+  tblBody <- Table.rowToOpenXML (blocksToOpenXML opts) .
+             Table.OOXMLRow Table.BodyRow nullAttr $
+             map blockToCell blks
+  let tbl = mknode "w:tbl" []
+        ( mknode "w:tblPr" []
+          ( mknode "w:tblStyle" [("w:val","FigureTable")] () :
+            mknode "w:tblW" [ ("w:type", "auto"), ("w:w", "0") ] () :
+            mknode "w:tblLook" [ ("w:firstRow", "0")
+                               , ("w:lastRow", "0")
+                               , ("w:firstColumn", "0")
+                               , ("w:lastColumn", "0")
+                               ] () :
+            mknode "w:jc" [("w:val","center")] () :
+            []
+          )
+          : mknode "w:tblGrid" [] gridCols
+          : [tblBody]
+        )
+  modify $ \s -> s { stInTable = False }
+  return $ Elem tbl
+
 
 definitionListItemToOpenXML  :: (PandocMonad m)
                              => WriterOptions -> ([Inline],[[Block]])
@@ -968,11 +1081,11 @@ addList marker = do
   lists <- gets stLists
   lastExampleId <- gets stExampleId
   modify $ \st -> st{ stLists = lists ++ case marker of
-                                         -- Use only first occurence of Example for list declaration to avoid overhead
+                                         -- Use only first occurrence of Example for list declaration to avoid overhead
                                          NumberMarker Example _ _ | isJust lastExampleId -> []
                                          _ -> [marker]
                     , stExampleId = case marker of
-                                         -- Reuse the same identifier for all other occurences of Example
+                                         -- Reuse the same identifier for all other occurrences of Example
                                          NumberMarker Example _ _ -> lastExampleId <|> Just (baseListId + length lists)
                                          _ -> lastExampleId
                   }
@@ -1013,7 +1126,12 @@ asList = local $ \env -> env{ envListLevel = envListLevel env + 1 }
 getTextProps :: (PandocMonad m) => WS m [Element]
 getTextProps = do
   props <- asks envTextProperties
-  let squashed = squashProps props
+  mblang <- asks envLang
+  let langnode = case mblang of
+                   Nothing -> mempty
+                   Just l  -> EnvProps Nothing
+                               [mknode "w:lang" [("w:val", l)] ()]
+  let squashed = squashProps (props <> langnode)
   return [mknode "w:rPr" [] squashed | (not . null) squashed]
 
 withTextProp :: PandocMonad m => Element -> WS m a -> WS m a
@@ -1072,6 +1190,9 @@ inlineToOpenXML' _ (Str str) =
   map Elem <$> formattedString str
 inlineToOpenXML' opts Space = inlineToOpenXML opts (Str " ")
 inlineToOpenXML' opts SoftBreak = inlineToOpenXML opts (Str " ")
+inlineToOpenXML' opts (Span ("",["mark"],[]) ils) =
+  withTextProp (mknode "w:highlight" [("w:val","yellow")] ()) $
+    inlinesToOpenXML opts ils
 inlineToOpenXML' opts (Span ("",["csl-block"],[]) ils) =
   inlinesToOpenXML opts ils
 inlineToOpenXML' opts (Span ("",["csl-left-margin"],[]) ils) =
@@ -1148,8 +1269,11 @@ inlineToOpenXML' opts (Span (ident,classes,kvs) ils) = do
                    return [Elem $ mknode "w:del"
                              (("w:id", tshow delId) : changeAuthorDate) x]
                else return id
-  contents <- insmod $ delmod $ dirmod $ stylemod $ pmod
-                     $ inlinesToOpenXML opts ils
+  let langmod = case lookup "lang" kvs of
+                  Nothing -> id
+                  Just lang -> local (\env -> env{envLang = Just lang})
+  contents <- insmod $ delmod $ dirmod $ stylemod $ pmod $
+              langmod $ inlinesToOpenXML opts ils
   wrapBookmark ident contents
 inlineToOpenXML' opts (Strong lst) =
   withTextProp (mknode "w:b" [] ()) $
@@ -1297,8 +1421,10 @@ inlineToOpenXML' opts (Image attr@(imgident, _, _) alt (src, title)) = do
         (xpt,ypt) = desiredSizeInPoints opts attr
                (either (const def) id (imageSize opts img))
         -- 12700 emu = 1 pt
-        (xemu,yemu) = fitToPage (xpt * 12700, ypt * 12700)
-                                (pageWidth * 12700)
+        pageWidthPt = case dimension Width attr of
+                        Just (Percent a) -> pageWidth * (floor $ a * 127)
+                        _                -> pageWidth * 12700
+        (xemu,yemu) = fitToPage (xpt * 12700, ypt * 12700) pageWidthPt
         cNvPicPr = mknode "pic:cNvPicPr" [] $
                          mknode "a:picLocks" [("noChangeArrowheads","1")
                                              ,("noChangeAspect","1")] ()

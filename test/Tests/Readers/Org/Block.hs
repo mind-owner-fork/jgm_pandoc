@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Block
-   Copyright   : © 2014-2022 Albert Krewinkel
+   Copyright   : © 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -185,6 +185,27 @@ tests =
                , "      \\end{cases}"
                , "\\end{equation}"
                ])
+
+    , "One-line LaTeX fragment" =:
+      "\\begin{equation} 2 + 3 \\end{equation}" =?>
+      rawBlock "latex" "\\begin{equation} 2 + 3 \\end{equation}\n"
+
+    , "LaTeX fragment with more arguments" =:
+      T.unlines [ "\\begin{tikzcd}[ampersand replacement=\\&]"
+                , "  A \\& B \\\\"
+                , "  C \\& D"
+                , "  \\arrow[from=1-1, to=1-2]"
+                , "  \\arrow[\"f\", from=2-1, to=2-2]"
+                , "\\end{tikzcd}"
+                ] =?>
+      rawBlock "latex"
+      (T.unlines [ "\\begin{tikzcd}[ampersand replacement=\\&]"
+                 , "  A \\& B \\\\"
+                 , "  C \\& D"
+                 , "  \\arrow[from=1-1, to=1-2]"
+                 , "  \\arrow[\"f\", from=2-1, to=2-2]"
+                 , "\\end{tikzcd}"
+                 ])
 
     , "Convert blank lines in blocks to single newlines" =:
       T.unlines [ "#+begin_html"

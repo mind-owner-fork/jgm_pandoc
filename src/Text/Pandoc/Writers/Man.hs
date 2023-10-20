@@ -3,7 +3,7 @@
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Man
-   Copyright   : Copyright (C) 2007-2022 John MacFarlane
+   Copyright   : Copyright (C) 2007-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,7 +14,9 @@ Conversion of 'Pandoc' documents to roff man page format.
 
 -}
 module Text.Pandoc.Writers.Man ( writeMan ) where
-import Control.Monad.State.Strict
+import Control.Monad ( liftM, zipWithM, forM )
+import Control.Monad.State.Strict ( StateT, gets, modify, evalStateT )
+import Control.Monad.Trans (MonadTrans(lift))
 import Data.List (intersperse)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Maybe (fromMaybe)
@@ -27,6 +29,7 @@ import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
+import Text.Pandoc.URI
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Math
 import Text.Pandoc.Writers.Shared
@@ -72,15 +75,16 @@ pandocToMan opts (Pandoc meta blocks) = do
   let context = defField "body" main
               $ setFieldsFromTitle
               $ defField "has-tables" hasTables
-              $ defField "hyphenate" True
-              $ defField "pandoc-version" pandocVersion metadata
+                metadata
   return $ render colwidth $
     case writerTemplate opts of
        Nothing  -> main
        Just tpl -> renderTemplate tpl context
 
 escString :: WriterOptions -> Text -> Text
-escString _ = escapeString AsciiOnly -- for better portability
+escString opts = escapeString (if writerPreferAscii opts
+                                  then AsciiOnly
+                                  else AllowUTF8)
 
 -- | Return man representation of notes.
 notesToMan :: PandocMonad m => WriterOptions -> [[Block]] -> StateT WriterState m (Doc Text)
@@ -105,7 +109,6 @@ blockToMan :: PandocMonad m
            => WriterOptions -- ^ Options
            -> Block         -- ^ Block element
            -> StateT WriterState m (Doc Text)
-blockToMan _ Null = return empty
 blockToMan opts (Div _ bs) = blockListToMan opts bs
 blockToMan opts (Plain inlines) =
   splitSentences <$> inlineListToMan opts inlines
@@ -128,14 +131,12 @@ blockToMan opts (Header level _ inlines) = do
   return $ nowrap $ literal heading <> contents
 blockToMan opts (CodeBlock _ str) = return $
   literal ".IP" $$
-  literal ".nf" $$
-  literal "\\f[C]" $$
+  literal ".EX" $$
   ((case T.uncons str of
     Just ('.',_) -> literal "\\&"
     _            -> mempty) <>
    literal (escString opts str)) $$
-  literal "\\f[R]" $$
-  literal ".fi"
+  literal ".EE"
 blockToMan opts (BlockQuote blocks) = do
   contents <- blockListToMan opts blocks
   return $ literal ".RS" $$ contents $$ literal ".RE"
@@ -168,7 +169,6 @@ blockToMan opts (Table _ blkCapt specs thead tbody tfoot) =
   return $ literal ".PP" $$ caption' $$
            literal ".TS" $$ literal "tab(@);" $$ coldescriptions $$
            colheadings' $$ vcat body $$ literal ".TE"
-
 blockToMan opts (BulletList items) = do
   contents <- mapM (bulletListItemToMan opts) items
   return (vcat contents)
@@ -181,6 +181,8 @@ blockToMan opts (OrderedList attribs items) = do
 blockToMan opts (DefinitionList items) = do
   contents <- mapM (definitionListItemToMan opts) items
   return (vcat contents)
+blockToMan opts (Figure attr capt body) = do
+  blockToMan opts (figureDiv attr capt body)
 
 -- | Convert bullet list item (list of blocks) to man.
 bulletListItemToMan :: PandocMonad m => WriterOptions -> [Block] -> StateT WriterState m (Doc Text)
@@ -252,7 +254,13 @@ blockListToMan :: PandocMonad m
                -> [Block]       -- ^ List of block elements
                -> StateT WriterState m (Doc Text)
 blockListToMan opts blocks =
-  vcat <$> mapM (blockToMan opts) blocks
+  vcat <$> mapM (blockToMan opts) (go blocks)
+ where
+   -- Avoid .PP right after .SH; this is a no-op in groff man and mandoc
+   -- but may cause unwanted extra space in some renderers (see #9020)
+   go [] = []
+   go (h@Header{} : Para ils : rest) = h : Plain ils : go rest
+   go (x : xs) = x : go xs
 
 -- | Convert list of Pandoc inline elements to man.
 inlineListToMan :: PandocMonad m => WriterOptions -> [Inline] -> StateT WriterState m (Doc Text)
@@ -287,8 +295,7 @@ inlineToMan opts (Quoted DoubleQuote lst) = do
 inlineToMan opts (Cite _ lst) =
   inlineListToMan opts lst
 inlineToMan opts (Code _ str) =
-  -- note that the V font is specially defined in the default man template
-  withFontFeature 'V' (return (literal $ escString opts str))
+  withFontFeature 'C' (return (literal $ escString opts str))
 inlineToMan opts (Str str@(T.uncons -> Just ('.',_))) =
   return $ afterBreak "\\&" <> literal (escString opts str)
 inlineToMan opts (Str str) = return $ literal $ escString opts str
@@ -304,18 +311,22 @@ inlineToMan _ il@(RawInline f str)
       return empty
 inlineToMan _ LineBreak = return $
   cr <> literal ".PD 0" $$ literal ".P" $$ literal ".PD" <> cr
-inlineToMan _ SoftBreak = return space
-inlineToMan _ Space = return space
+inlineToMan _ SoftBreak = return $ afterBreak "\\" <> space
+inlineToMan _ Space = return $ afterBreak "\\" <> space
 inlineToMan opts (Link _ txt (src, _))
   | not (isURI src) = inlineListToMan opts txt -- skip relative links
   | otherwise       = do
-  linktext <- inlineListToMan opts txt
   let srcSuffix = fromMaybe src (T.stripPrefix "mailto:" src)
-  return $ case txt of
-           [Str s]
-             | escapeURI s == srcSuffix ->
-                                 char '<' <> literal srcSuffix <> char '>'
-           _                  -> linktext <> literal " (" <> literal src <> char ')'
+  linktext <- case txt of
+                [Str s] | escapeURI s == srcSuffix -> pure mempty
+                _ -> inlineListToMan opts txt
+  let (start, end) = if "mailto:" `T.isPrefixOf` src
+                        then (".MT", ".ME")
+                        else (".UR", ".UE")
+  return $ "\\c" <> cr -- \c avoids extra space
+        $$ (start <+> literal srcSuffix)
+        $$ linktext
+        $$ (end <+> "\\c" <> cr)  -- \c avoids space after
 inlineToMan opts (Image attr alternate (source, tit)) = do
   let txt = if null alternate || (alternate == [Str ""]) ||
                (alternate == [Str source]) -- to prevent autolinks

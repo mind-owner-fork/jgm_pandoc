@@ -1,7 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TemplateHaskell #-}
 {- |
    Module      : Text.Pandoc.Readers.DocBook
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -11,29 +14,42 @@
 Conversion of DocBook XML to 'Pandoc' document.
 -}
 module Text.Pandoc.Readers.DocBook ( readDocBook ) where
+import Control.Monad (MonadPlus(mplus))
 import Control.Monad.State.Strict
-import Data.Char (isSpace, isLetter)
+    ( MonadTrans(lift),
+      StateT(runStateT),
+      MonadState(get),
+      gets,
+      modify )
+import Data.ByteString (ByteString)
+import Data.FileEmbed
+import Data.Char (isSpace, isLetter, chr)
 import Data.Default
 import Data.Either (rights)
 import Data.Foldable (asum)
 import Data.Generics
 import Data.List (intersperse,elemIndex)
+import qualified Data.Set as Set
 import Data.List.NonEmpty (nonEmpty)
 import Data.Maybe (catMaybes,fromMaybe,mapMaybe,maybeToList)
 import Data.Text (Text)
+import Data.Text.Read as TR
+import Data.Text.Encoding (decodeUtf8)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import Control.Monad.Except (throwError)
-import Text.HTML.TagSoup.Entity (lookupEntity)
+import Text.Pandoc.XML (lookupEntity)
 import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.Builder
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Options
 import Text.Pandoc.Logging (LogMessage(..))
-import Text.Pandoc.Shared (safeRead, extractSpaces)
+import Text.Pandoc.Shared (safeRead, extractSpaces, headerShift)
 import Text.Pandoc.Sources (ToSources(..), sourcesToText)
 import Text.TeXMath (readMathML, writeTeX)
+import qualified Data.Map as M
 import Text.Pandoc.XML.Light
+import Text.Pandoc.Walk (query)
 
 {-
 
@@ -305,7 +321,7 @@ List of all DocBook tags, with [x] indicating implemented,
 [x] para - A paragraph
 [ ] paramdef - Information about a function parameter in a programming language
 [x] parameter - A value or a symbolic reference to a value
-[ ] part - A division in a book
+[x] part - A division in a book
 [ ] partinfo - Meta-information for a Part
 [ ] partintro - An introduction to the contents of a part
 [ ] personblurb - A short description or note about a person
@@ -526,8 +542,6 @@ data DBState = DBState{ dbSectionLevel :: Int
                       , dbQuoteType    :: QuoteType
                       , dbMeta         :: Meta
                       , dbBook         :: Bool
-                      , dbFigureTitle  :: Inlines
-                      , dbFigureId     :: Text
                       , dbContent      :: [Content]
                       } deriving Show
 
@@ -536,8 +550,6 @@ instance Default DBState where
                , dbQuoteType = DoubleQuote
                , dbMeta = mempty
                , dbBook = False
-               , dbFigureTitle = mempty
-               , dbFigureId = mempty
                , dbContent = [] }
 
 
@@ -548,10 +560,18 @@ readDocBook :: (PandocMonad m, ToSources a)
 readDocBook _ inp = do
   let sources = toSources inp
   tree <- either (throwError . PandocXMLError "") return $
-            parseXMLContents
+            parseXMLContentsWithEntities
+            docbookEntityMap
               (TL.fromStrict . handleInstructions . sourcesToText $ sources)
   (bs, st') <- flip runStateT (def{ dbContent = tree }) $ mapM parseBlock tree
-  return $ Pandoc (dbMeta st') (toList . mconcat $ bs)
+  let headerLevel (Header n _ _) = [n]
+      headerLevel _              = []
+  let bottomLevel = maybe 1 minimum $ nonEmpty $ query headerLevel bs
+  return $
+    -- handle the case where you have <part> or <chapter>
+    (if bottomLevel < 1
+        then headerShift (1 - bottomLevel)
+        else id) $ Pandoc (dbMeta st') $ toList $ mconcat bs
 
 -- We treat certain processing instructions by converting them to tags
 -- beginning "pi-".
@@ -573,11 +593,15 @@ getFigure e = do
   tit <- case filterChild (named "title") e of
               Just t  -> getInlines t
               Nothing -> return mempty
-  let ident = attrValue "id" e
-  modify $ \st -> st{ dbFigureTitle = tit, dbFigureId = ident }
-  res <- getBlocks e
-  modify $ \st -> st{ dbFigureTitle = mempty, dbFigureId = mempty }
-  return res
+  contents <- getBlocks e
+  let contents' =
+        case toList contents of
+          [Para [img@Image{}]] -> plain (fromList [img])
+          _ -> contents
+  return $ figureWith
+             (attrValue "id" e, [], [])
+             (simpleCaption $ plain tit)
+             contents'
 
 -- convenience function to get an attribute value, defaulting to ""
 attrValue :: Text -> Element -> Text
@@ -591,34 +615,83 @@ named s e = qName (elName e) == s
 --
 
 addMetadataFromElement :: PandocMonad m => Element -> DB m Blocks
-addMetadataFromElement e = do
-    case filterChild (named "title") e of
-         Nothing -> return ()
-         Just z  -> do
-           getInlines z >>= addMeta "title"
-           addMetaField "subtitle" z
-    case filterChild (named "authorgroup") e of
-         Nothing -> return ()
-         Just z  -> addMetaField "author" z
-    addMetaField "subtitle" e
-    addAuthor e
-    addMetaField "date" e
-    addMetaField "release" e
-    addMetaField "releaseinfo" e
-    return mempty
-  where
-   addAuthor elt =
-     case filterChildren (named "author") elt of
-       [] -> return ()
-       [z] -> fromAuthor z >>= addMeta "author"
-       zs  -> mapM fromAuthor zs >>= addMeta "author"
-   fromAuthor elt =
-     mconcat . intersperse space <$> mapM getInlines (elChildren elt)
-   addMetaField fieldname elt =
-     case filterChildren (named fieldname) elt of
-       []  -> return ()
-       [z] -> getInlines z >>= addMeta fieldname
-       zs  -> mapM getInlines zs >>= addMeta fieldname
+addMetadataFromElement e =
+  mempty <$ mapM_ handleMetadataElement
+                  (filterChildren ((isMetadataField . qName . elName)) e)
+ where
+  handleMetadataElement elt =
+    case qName (elName elt) of
+      "title" -> addContentsToMetadata "title" elt
+      "subtitle" -> addContentsToMetadata "subtitle" elt
+      "abstract" -> addContentsToMetadata "abstract" elt
+      "date" -> addContentsToMetadata "date" elt
+      "release" -> addContentsToMetadata "release" elt
+      "releaseinfo" -> addContentsToMetadata "releaseinfo" elt
+      "address" -> addContentsToMetadata "address" elt
+      "copyright" -> addContentsToMetadata "copyright" elt
+      "author" -> fromAuthor elt >>= addMeta "author"
+      "authorgroup" ->
+        mapM fromAuthor (filterChildren (named "author") elt) >>= addMeta "author"
+      _ -> report . IgnoredElement . qName . elName $ elt
+
+  fromAuthor elt =
+    mconcat . intersperse space . filter (not . null)
+      <$> mapM getInlines (elChildren elt)
+
+  addContentsToMetadata fieldname elt =
+    if any ((`Set.member` blockTags) . qName . elName) (elChildren elt)
+       then getBlocks elt >>= addMeta fieldname
+       else getInlines elt >>= addMeta fieldname
+
+  isMetadataField "abstract" = True
+  isMetadataField "address" = True
+  isMetadataField "annotation" = True
+  isMetadataField "artpagenums" = True
+  isMetadataField "author" = True
+  isMetadataField "authorgroup" = True
+  isMetadataField "authorinitials" = True
+  isMetadataField "bibliocoverage" = True
+  isMetadataField "biblioid" = True
+  isMetadataField "bibliomisc" = True
+  isMetadataField "bibliomset" = True
+  isMetadataField "bibliorelation" = True
+  isMetadataField "biblioset" = True
+  isMetadataField "bibliosource" = True
+  isMetadataField "collab" = True
+  isMetadataField "confgroup" = True
+  isMetadataField "contractnum" = True
+  isMetadataField "contractsponsor" = True
+  isMetadataField "copyright" = True
+  isMetadataField "cover" = True
+  isMetadataField "date" = True
+  isMetadataField "edition" = True
+  isMetadataField "editor" = True
+  isMetadataField "extendedlink" = True
+  isMetadataField "issuenum" = True
+  isMetadataField "itermset" = True
+  isMetadataField "keywordset" = True
+  isMetadataField "legalnotice" = True
+  isMetadataField "mediaobject" = True
+  isMetadataField "org" = True
+  isMetadataField "orgname" = True
+  isMetadataField "othercredit" = True
+  isMetadataField "pagenums" = True
+  isMetadataField "printhistory" = True
+  isMetadataField "productname" = True
+  isMetadataField "productnumber" = True
+  isMetadataField "pubdate" = True
+  isMetadataField "publisher" = True
+  isMetadataField "publishername" = True
+  isMetadataField "releaseinfo" = True
+  isMetadataField "revhistory" = True
+  isMetadataField "seriesvolnums" = True
+  isMetadataField "subjectset" = True
+  isMetadataField "subtitle" = True
+  isMetadataField "title" = True
+  isMetadataField "titleabbrev" = True
+  isMetadataField "volumenum" = True
+  isMetadataField _ = False
+
 
 addMeta :: PandocMonad m => ToMetaValue a => Text -> a -> DB m ()
 addMeta field val = modify (setMeta field val)
@@ -628,11 +701,11 @@ instance HasMeta DBState where
   deleteMeta field s = s {dbMeta = deleteMeta field (dbMeta s)}
 
 isBlockElement :: Content -> Bool
-isBlockElement (Elem e) = qName (elName e) `elem` blockTags
+isBlockElement (Elem e) = qName (elName e) `Set.member` blockTags
 isBlockElement _ = False
 
-blockTags :: [Text]
-blockTags =
+blockTags :: Set.Set Text
+blockTags = Set.fromList $
   [ "abstract"
   , "ackno"
   , "answer"
@@ -681,6 +754,8 @@ blockTags =
   , "mediaobject"
   , "orderedlist"
   , "para"
+  , "part"
+  , "partinfo"
   , "preface"
   , "procedure"
   , "programlisting"
@@ -738,36 +813,35 @@ addToStart toadd bs =
 -- A DocBook mediaobject is a wrapper around a set of alternative presentations
 getMediaobject :: PandocMonad m => Element -> DB m Inlines
 getMediaobject e = do
-  figTitle <- gets dbFigureTitle
-  ident <- gets dbFigureId
-  (imageUrl, attr) <-
-    case filterElements (named "imageobject") e of
-      []  -> return (mempty, nullAttr)
-      (z:_) -> case filterChild (named "imagedata") z of
-                    Nothing -> return (mempty, nullAttr)
-                    Just i  -> let atVal a = attrValue a i
-                                   w = case atVal "width" of
-                                         "" -> []
-                                         d  -> [("width", d)]
-                                   h = case atVal "depth" of
-                                         "" -> []
-                                         d  -> [("height", d)]
-                                   id' = case atVal "id" of
-                                           x | T.null x  -> ident
-                                             | otherwise -> x
-                                   cs = T.words $ atVal "role"
-                                   atr = (id', cs, w ++ h)
-                               in  return (atVal "fileref", atr)
-  let getCaption el = case filterChild (\x -> named "caption" x
+  let (imageUrl, tit, attr) =
+        case filterElements (named "imageobject") e of
+          []  -> (mempty, mempty, nullAttr)
+          (z:_) ->
+            let tit' = maybe "" strContent $
+                         filterChild (named "objectinfo") z >>=
+                         filterChild (named "title")
+                (imageUrl', attr') =
+                  case filterChild (named "imagedata") z of
+                        Nothing -> (mempty, nullAttr)
+                        Just i  -> let atVal a = attrValue a i
+                                       w = case atVal "width" of
+                                             "" -> []
+                                             d  -> [("width", d)]
+                                       h = case atVal "depth" of
+                                             "" -> []
+                                             d  -> [("height", d)]
+                                       id' = atVal "id"
+                                       cs = T.words $ atVal "role"
+                                       atr = (id', cs, w ++ h)
+                                   in  (atVal "fileref", atr)
+            in  (imageUrl', tit', attr')
+  let capt = case filterChild (\x -> named "caption" x
                                             || named "textobject" x
-                                            || named "alt" x) el of
+                                            || named "alt" x) e of
                         Nothing -> return mempty
-                        Just z  -> mconcat <$>
+                        Just z  -> trimInlines . mconcat <$>
                                          mapM parseInline (elContent z)
-  let (capt, title) = if null figTitle
-                         then (getCaption e, "")
-                         else (return figTitle, "fig:")
-  fmap (imageWith attr imageUrl title) capt
+  fmap (imageWith attr imageUrl tit) capt
 
 getBlocks :: PandocMonad m => Element -> DB m Blocks
 getBlocks e =  mconcat <$>
@@ -818,6 +892,7 @@ parseBlock (Elem e) =
         "glosslist" -> definitionList <$>
                   mapM parseGlossEntry (filterChildren (named "glossentry") e)
         "chapter" -> modify (\st -> st{ dbBook = True}) >> sect 0
+        "part" -> modify (\st -> st{ dbBook = True}) >> sect (-1)
         "appendix" -> sect 0
         "preface" -> sect 0
         "bridgehead" -> para . strong <$> getInlines e
@@ -876,6 +951,7 @@ parseBlock (Elem e) =
         "sect4info" -> skip  -- keywords & other metadata
         "sect5info" -> skip  -- keywords & other metadata
         "chapterinfo" -> skip -- keywords & other metadata
+        "partinfo" -> skip -- keywords & other metadata
         "glossaryinfo" -> skip  -- keywords & other metadata
         "appendixinfo" -> skip  -- keywords & other metadata
         "bookinfo" -> addMetadataFromElement e
@@ -894,7 +970,7 @@ parseBlock (Elem e) =
         "?xml"  -> return mempty
         "title" -> return mempty     -- handled in parent element
         "subtitle" -> return mempty  -- handled in parent element
-        _       -> skip >> getBlocks e
+        _ -> skip >> getBlocks e
    where skip = do
            let qn = qName $ elName e
            let name = if "pi-" `T.isPrefixOf` qn
@@ -1108,7 +1184,7 @@ attrValueAsOptionalAttr n e = case attrValue n e of
 parseInline :: PandocMonad m => Content -> DB m Inlines
 parseInline (Text (CData _ s _)) = return $ text s
 parseInline (CRef ref) =
-  return $ text $ maybe (T.toUpper ref) T.pack $ lookupEntity (T.unpack ref)
+  return $ text $ fromMaybe (T.toUpper ref) $ lookupEntity ref
 parseInline (Elem e) =
   case qName (elName e) of
         "anchor" -> do
@@ -1207,7 +1283,10 @@ parseInline (Elem e) =
         "ulink" -> innerInlines (link (attrValue "url" e) "")
         "link" -> do
              ils <- innerInlines id
-             let href = case findAttr (QName "href" (Just "http://www.w3.org/1999/xlink") Nothing) e of
+             let href = case findAttrBy
+                               (\case
+                                 QName "href" _ _ -> True
+                                 _ -> False) e of
                                Just h -> h
                                _      -> "#" <> attrValue "linkend" e
              let ils' = if ils == mempty then str href else ils
@@ -1215,9 +1294,11 @@ parseInline (Elem e) =
              return $ linkWith attr href "" ils'
         "foreignphrase" -> innerInlines emph
         "emphasis" -> case attrValue "role" e of
+                             "bf"            -> innerInlines strong
                              "bold"          -> innerInlines strong
                              "strong"        -> innerInlines strong
                              "strikethrough" -> innerInlines strikeout
+                             "underline"     -> innerInlines underline
                              _               -> innerInlines emph
         "footnote" -> note . mconcat <$>
                          mapM parseBlock (elContent e)
@@ -1275,6 +1356,8 @@ parseInline (Elem e) =
          xrefTitleByElem el
              | not (T.null xrefLabel) = xrefLabel
              | otherwise              = case qName (elName el) of
+                  "book"         -> descendantContent "title" el
+                  "part"         -> descendantContent "title" el
                   "chapter"      -> descendantContent "title" el
                   "section"      -> descendantContent "title" el
                   "sect1"        -> descendantContent "title" el
@@ -1284,6 +1367,8 @@ parseInline (Elem e) =
                   "sect5"        -> descendantContent "title" el
                   "cmdsynopsis"  -> descendantContent "command" el
                   "funcsynopsis" -> descendantContent "function" el
+                  "figure"       -> descendantContent "title" el
+                  "table"        -> descendantContent "title" el
                   _              -> qName (elName el) <> "_title"
           where
             xrefLabel = attrValue "xreflabel" el
@@ -1335,3 +1420,17 @@ paraToPlain :: Block -> Block
 paraToPlain (Para ils) = Plain ils
 paraToPlain x = x
 
+docbookEntityMap :: M.Map Text Text
+docbookEntityMap = M.fromList
+  (map lineToPair (T.lines (decodeUtf8 docbookEntities)))
+ where
+   lineToPair l =
+     case T.words l of
+       (x:ys) -> (x, T.pack (mapMaybe readHex ys))
+       [] -> ("","")
+   readHex t = case TR.hexadecimal t of
+                 Left _ -> Nothing
+                 Right (n,_) -> Just (chr n)
+
+docbookEntities :: ByteString
+docbookEntities = $(embedFile "data/docbook-entities.txt")

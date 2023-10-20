@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.LaTeX.Lang
-   Copyright   : Copyright (C) 2018-2022 John MacFarlane
+   Copyright   : Copyright (C) 2018-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -24,7 +24,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Text.Pandoc.Shared (extractSpaces)
 import Text.Collate.Lang (Lang(..), renderLang)
-import Text.Pandoc.Class (PandocMonad(..), setTranslations)
+import Text.Pandoc.Class (PandocMonad(..))
+import Text.Pandoc.Translations (setTranslations)
 import Text.Pandoc.Readers.LaTeX.Parsing
 import Text.Pandoc.Parsing (updateState, option, getState, QuoteContext(..),
                             withQuoteContext)

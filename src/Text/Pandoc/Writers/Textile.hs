@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Textile
-   Copyright   : Copyright (C) 2010-2022 John MacFarlane
+   Copyright   : Copyright (C) 2010-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -13,7 +13,8 @@ Conversion of 'Pandoc' documents to Textile markup.
 Textile:  <http://thresholdstate.com/articles/4312/the-textile-reference-manual>
 -}
 module Text.Pandoc.Writers.Textile ( writeTextile ) where
-import Control.Monad.State.Strict
+import Control.Monad (zipWithM, liftM)
+import Control.Monad.State.Strict ( StateT, gets, modify, evalStateT )
 import Data.Char (isSpace)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -99,8 +100,6 @@ blockToTextile :: PandocMonad m
                -> Block         -- ^ Block element
                -> TW m Text
 
-blockToTextile _ Null = return ""
-
 blockToTextile opts (Div attr bs) = do
   let startTag = render Nothing $ tagWithAttrs "div" attr
   let endTag = "</div>"
@@ -109,11 +108,6 @@ blockToTextile opts (Div attr bs) = do
 
 blockToTextile opts (Plain inlines) =
   inlineListToTextile opts inlines
-
-blockToTextile opts (SimpleFigure attr txt (src, tit)) = do
-  capt <- blockToTextile opts (Para txt)
-  im <- inlineToTextile opts (Image attr txt (src,tit))
-  return $ im <> "\n" <> capt
 
 blockToTextile opts (Para inlines) = do
   useTags <- gets stUseTags
@@ -241,6 +235,19 @@ blockToTextile opts x@(OrderedList attribs@(start, _, _) items) = do
 blockToTextile opts (DefinitionList items) = do
   contents <- withUseTags $ mapM (definitionListItemToTextile opts) items
   return $ "<dl>\n" <> vcat contents <> "\n</dl>\n"
+
+blockToTextile opts (Figure attr (Caption _ caption)  body) = do
+  let startTag = render Nothing $ tagWithAttrs "figure" attr
+  let endTag = "</figure>"
+  let captionInlines = blocksToInlines caption
+  captionMarkup <- if null captionInlines
+                      then return ""
+                      else ((<> "\n\n</figcaption>\n\n") .  ("<figcaption>\n\n" <>)) <$>
+                          inlineListToTextile opts (blocksToInlines caption)
+  contents <- blockListToTextile opts body
+  return $ startTag <> "\n\n" <>
+    captionMarkup <>
+    contents <> "\n\n" <> endTag <> "\n"
 
 -- Auxiliary functions for lists:
 
@@ -380,37 +387,37 @@ inlineToTextile opts (Span _ lst) =
 
 inlineToTextile opts (Emph lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '_' `elemText` contents
+  return $ if T.any (== '_') contents
               then "<em>" <> contents <> "</em>"
               else "_" <> contents <> "_"
 
 inlineToTextile opts (Underline lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '+' `elemText` contents
+  return $ if T.any (== '+') contents
               then "<u>" <> contents <> "</u>"
               else "+" <> contents <> "+"
 
 inlineToTextile opts (Strong lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '*' `elemText` contents
+  return $ if T.any (== '*') contents
               then "<strong>" <> contents <> "</strong>"
               else "*" <> contents <> "*"
 
 inlineToTextile opts (Strikeout lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '-' `elemText` contents
+  return $ if T.any (== '-') contents
               then "<del>" <> contents <> "</del>"
               else "-" <> contents <> "-"
 
 inlineToTextile opts (Superscript lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '^' `elemText` contents
+  return $ if T.any (== '^') contents
               then "<sup>" <> contents <> "</sup>"
               else "[^" <> contents <> "^]"
 
 inlineToTextile opts (Subscript lst) = do
   contents <- inlineListToTextile opts lst
-  return $ if '~' `elemText` contents
+  return $ if T.any (== '~') contents
               then "<sub>" <> contents <> "</sub>"
               else "[~" <> contents <> "~]"
 
@@ -427,7 +434,7 @@ inlineToTextile opts (Quoted DoubleQuote lst) = do
 inlineToTextile opts (Cite _  lst) = inlineListToTextile opts lst
 
 inlineToTextile _ (Code _ str) =
-  return $ if '@' `elemText` str
+  return $ if T.any (== '@') str
            then "<tt>" <> escapeStringForXML str <> "</tt>"
            else "@" <> str <> "@"
 

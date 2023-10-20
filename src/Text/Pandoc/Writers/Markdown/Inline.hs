@@ -3,7 +3,7 @@
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.Markdown.Inline
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,8 +16,11 @@ module Text.Pandoc.Writers.Markdown.Inline (
   attrsToMarkdown,
   attrsToMarkua
   ) where
+import Control.Monad (when, liftM2)
 import Control.Monad.Reader
+    ( asks, MonadReader(local) )
 import Control.Monad.State.Strict
+    ( MonadState(get), gets, modify )
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (find, intersperse)
 import Data.List.NonEmpty (nonEmpty)
@@ -32,7 +35,7 @@ import Text.Pandoc.Options
 import Text.Pandoc.Parsing hiding (blankline, blanklines, char, space)
 import Text.DocLayout
 import Text.Pandoc.Shared
-import Text.Pandoc.Network.HTTP (urlEncode)
+import Text.Pandoc.URI (urlEncode, escapeURI, isURI)
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Walk
 import Text.Pandoc.Writers.HTML (writeHtml5String)
@@ -66,51 +69,60 @@ escapeText opts = T.pack . go' . T.unpack
              _ -> '@':go cs
   go' cs = go cs
   go [] = []
+  go ['\\'] = ['\\','\\']
+  go ('-':'-':cs)
+    | isEnabled Ext_smart opts = '\\':'-':go('-':cs)
+  go ('.':'.':'.':cs)
+    | isEnabled Ext_smart opts = '\\':'.':'.':'.':go cs
+  go (c:'_':d:cs)
+    | isAlphaNum c
+    , isAlphaNum d =
+      if isEnabled Ext_intraword_underscores opts
+         then c:'_':go (d:cs)
+         else c:'\\':'_':go (d:cs)
+  go ('\\':c:cs)
+    | isEnabled Ext_raw_tex opts = '\\':'\\':go (c:cs)
+    | isAlphaNum c = '\\' : go (c:cs)
+    | otherwise = '\\':'\\': go cs
+  go ('!':'[':cs) = '\\':'!':'[': go cs
+  go ('=':'=':cs)
+    | isEnabled Ext_mark opts = '\\':'=':go ('=':cs)
+  go ('~':'~':cs)
+    | isEnabled Ext_strikeout opts = '\\':'~':go ('~':cs)
   go (c:cs) =
     case c of
-       _ | c `elem` ['\\','`','*','_','[',']'] ->
-              '\\':c:go cs
+       '[' -> '\\':c:go cs
+       ']' -> '\\':c:go cs
+       '`' -> '\\':c:go cs
+       '*' -> '\\':c:go cs
+       '_' -> '\\':c:go cs
        '>' | isEnabled Ext_all_symbols_escapable opts -> '\\':'>':go cs
            | otherwise -> "&gt;" ++ go cs
        '<' | isEnabled Ext_all_symbols_escapable opts -> '\\':'<':go cs
            | otherwise -> "&lt;" ++ go cs
        '|' | isEnabled Ext_pipe_tables opts -> '\\':'|':go cs
        '^' | isEnabled Ext_superscript opts -> '\\':'^':go cs
-       '~' | isEnabled Ext_subscript opts ||
-             isEnabled Ext_strikeout opts -> '\\':'~':go cs
+       '~' | isEnabled Ext_subscript opts -> '\\':'~':go cs
        '$' | isEnabled Ext_tex_math_dollars opts -> '\\':'$':go cs
        '\'' | isEnabled Ext_smart opts -> '\\':'\'':go cs
        '"' | isEnabled Ext_smart opts -> '\\':'"':go cs
-       '-' | isEnabled Ext_smart opts ->
-              case cs of
-                   '-':_ -> '\\':'-':go cs
-                   _     -> '-':go cs
-       '.' | isEnabled Ext_smart opts ->
-              case cs of
-                   '.':'.':rest -> '\\':'.':'.':'.':go rest
-                   _            -> '.':go cs
-       _   -> case cs of
-                '_':x:xs
-                  | isEnabled Ext_intraword_underscores opts
-                  , isAlphaNum c
-                  , isAlphaNum x -> c : '_' : x : go xs
-                _                -> c : go cs
+       _   -> c : go cs
 
 -- Escape the escape character, as well as formatting pairs
 escapeMarkuaString :: Text -> Text
 escapeMarkuaString s = foldr (uncurry T.replace) s [("--","~-~-"),
                         ("**","~*~*"),("//","~/~/"),("^^","~^~^"),(",,","~,~,")]
 
-attrsToMarkdown :: Attr -> Doc Text
-attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
+attrsToMarkdown :: WriterOptions -> Attr -> Doc Text
+attrsToMarkdown opts attribs = braces $ hsep [attribId, attribClasses, attribKeys]
         where attribId = case attribs of
                                 ("",_,_) -> empty
-                                (i,_,_)  -> "#" <> escAttr i
+                                (i,_,_)  -> "#" <> escAttr (writerIdentifierPrefix opts <> i)
               attribClasses = case attribs of
                                 (_,[],_) -> empty
                                 (_,cs,_) -> hsep $
-                                            map (escAttr . ("."<>))
-                                            cs
+                                            map (escAttr . ("."<>)) $
+                                            filter (not . T.null) cs
               attribKeys = case attribs of
                                 (_,_,[]) -> empty
                                 (_,_,ks) -> hsep $
@@ -122,13 +134,13 @@ attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
               escAttrChar '\\' = literal "\\\\"
               escAttrChar c    = literal $ T.singleton c
 
-attrsToMarkua:: Attr -> Doc Text
-attrsToMarkua attributes
+attrsToMarkua:: WriterOptions -> Attr -> Doc Text
+attrsToMarkua opts attributes
      | null list = empty
      | otherwise = braces $ intercalateDocText list
         where attrId = case attributes of
                         ("",_,_) -> []
-                        (i,_,_)  -> [literal $ "id: " <> i]
+                        (i,_,_)  -> [literal $ "id: " <> writerIdentifierPrefix opts <> i]
               -- all non explicit (key,value) attributes besides id are getting
               -- a default class key to be Markua conform
               attrClasses = case attributes of
@@ -172,7 +184,7 @@ linkAttributes :: WriterOptions -> Attr -> Doc Text
 linkAttributes opts attr =
   if (isEnabled Ext_link_attributes opts ||
         isEnabled Ext_attributes opts) && attr /= nullAttr
-     then attrsToMarkdown attr
+     then attrsToMarkdown opts attr
      else empty
 
 getKey :: Doc Text -> Key
@@ -256,6 +268,11 @@ inlineListToMarkdown opts ils = do
           | T.all isDigit (T.take 1 t) -- starts with digit -- see #7058
           = liftM2 (<>) (inlineToMarkdown opts x)
               (go (RawInline (Format "html") "<!-- -->" : y : zs))
+        go (Str t : i : is)
+          | isLinkOrSpan i
+          , T.takeEnd 1 t == "!"
+          = do x <- inlineToMarkdown opts (Str (T.dropEnd 1 t))
+               ((x <> "\\!") <>) <$> go (i:is)
         go (i:is) = case i of
             Link {} -> case is of
                 -- If a link is followed by another link, or '[', '(' or ':'
@@ -283,13 +300,17 @@ inlineListToMarkdown opts ils = do
                 (RawInline _ (T.stripPrefix " [" -> Just _ )):_ -> unshortcutable
                 _                                               -> shortcutable
             _ -> shortcutable
-          where shortcutable = liftM2 (<>) (inlineToMarkdown opts i) (go is)
-                unshortcutable = do
-                    iMark <- local
-                             (\env -> env { envRefShortcutable = False })
-                             (inlineToMarkdown opts i)
-                    fmap (iMark <>) (go is)
-                thead = fmap fst . T.uncons
+          where
+           shortcutable = liftM2 (<>) (inlineToMarkdown opts i) (go is)
+           unshortcutable = do
+               iMark <- local
+                        (\env -> env { envRefShortcutable = False })
+                        (inlineToMarkdown opts i)
+               fmap (iMark <>) (go is)
+           thead = fmap fst . T.uncons
+        isLinkOrSpan Link{} = True
+        isLinkOrSpan Span{} = True
+        isLinkOrSpan _ = False
 
 -- Remove breaking spaces that might cause bad wraps.
 avoidBadWraps :: Bool -> Doc Text -> Doc Text
@@ -326,6 +347,10 @@ inlineToMarkdown opts (Span ("",["emoji"],kvs) [Str s]) =
        Just emojiname | isEnabled Ext_emoji opts ->
             return $ ":" <> literal emojiname <> ":"
        _ -> inlineToMarkdown opts (Str s)
+inlineToMarkdown opts (Span ("",["mark"],[]) ils)
+  | isEnabled Ext_mark opts
+    = do contents <- inlineListToMarkdown opts ils
+         return $ "==" <> contents <> "=="
 inlineToMarkdown opts (Span attrs ils) = do
   variant <- asks envVariant
   contents <- inlineListToMarkdown opts ils
@@ -336,11 +361,11 @@ inlineToMarkdown opts (Span attrs ils) = do
              _ -> id
          $ case variant of
                 PlainText -> contents
-                Markua -> "`" <> contents <> "`" <> attrsToMarkua attrs
+                Markua -> "`" <> contents <> "`" <> attrsToMarkua opts attrs
                 _     | attrs == nullAttr -> contents
                       | isEnabled Ext_bracketed_spans opts ->
                         let attrs' = if attrs /= nullAttr
-                                        then attrsToMarkdown attrs
+                                        then attrsToMarkdown opts attrs
                                         else empty
                         in "[" <> contents <> "]" <> attrs'
                       | isEnabled Ext_raw_html opts ||
@@ -458,9 +483,9 @@ inlineToMarkdown opts (Code attr str) = do
   let attrsEnabled = isEnabled Ext_inline_code_attributes opts ||
                      isEnabled Ext_attributes opts
   let attrs = case variant of
-                       Markua -> attrsToMarkua attr
+                       Markua -> attrsToMarkua opts attr
                        _   -> if attrsEnabled && attr /= nullAttr
-                                        then attrsToMarkdown attr
+                                        then attrsToMarkdown opts attr
                                         else empty
   case variant of
      PlainText -> return $ literal str
@@ -504,7 +529,7 @@ inlineToMarkdown opts (Math DisplayMath str) = do
   variant <- asks envVariant
   case () of
     _ | variant == Markua -> do
-        let attributes = attrsToMarkua (addKeyValueToAttr ("",[],[])
+        let attributes = attrsToMarkua opts (addKeyValueToAttr ("",[],[])
                                                         ("format", "latex"))
         return $ blankline <> attributes <> cr <> literal "```" <> cr
             <> literal str <> cr <> literal "```" <> blankline
@@ -626,10 +651,14 @@ inlineToMarkdown opts lnk@(Link attr@(ident,classes,kvs) txt (src, tit)) = do
                 case txt of
                       [Str s] | escapeURI s == srcSuffix -> True
                       _       -> False
+  let useWikilink = tit == "wikilink" &&
+                    (isEnabled Ext_wikilinks_title_after_pipe opts ||
+                     isEnabled Ext_wikilinks_title_before_pipe opts)
   let useRefLinks = writerReferenceLinks opts && not useAuto
   shortcutable <- asks envRefShortcutable
   let useShortcutRefLinks = shortcutable &&
-                            isEnabled Ext_shortcut_reference_links opts
+                             (variant == Commonmark ||
+                              isEnabled Ext_shortcut_reference_links opts)
   reftext <- if useRefLinks
                 then literal <$> getReference attr linktext (src, tit)
                 else return mempty
@@ -638,11 +667,18 @@ inlineToMarkdown opts lnk@(Link attr@(ident,classes,kvs) txt (src, tit)) = do
       | useAuto -> return $ literal srcSuffix
       | otherwise -> return linktext
     Markua
-      | T.null tit -> return $ result <> attrsToMarkua attr
-      | otherwise ->  return $ result <> attrsToMarkua attributes
+      | T.null tit -> return $ result <> attrsToMarkua opts attr
+      | otherwise ->  return $ result <> attrsToMarkua opts attributes
         where result = "[" <> linktext <> "](" <> (literal src) <> ")"
               attributes = addKeyValueToAttr attr ("title", tit)
-    _ | useAuto -> return $ "<" <> literal srcSuffix <> ">"
+    -- Use wikilinks where possible
+    _ | src == stringify txt && useWikilink ->
+        return $ "[[" <> literal (stringify txt) <> "]]"
+      | useAuto -> return $ "<" <> literal srcSuffix <> ">"
+      | useWikilink && isEnabled Ext_wikilinks_title_after_pipe opts -> return $
+        "[[" <> literal src <> "|" <> literal (stringify txt) <> "]]"
+      | useWikilink && isEnabled Ext_wikilinks_title_before_pipe opts -> return $
+        "[[" <> literal (stringify txt) <> "|" <> literal src <> "]]"
       | useRefLinks ->
            let first  = "[" <> linktext <> "]"
                second = if getKey linktext == getKey reftext
@@ -674,7 +710,7 @@ inlineToMarkdown opts img@(Image attr alternate (source, tit))
                else alternate
   linkPart <- inlineToMarkdown opts (Link attr txt (source, tit))
   alt <- inlineListToMarkdown opts alternate
-  let attributes | variant == Markua = attrsToMarkua $
+  let attributes | variant == Markua = attrsToMarkua opts $
             addKeyValueToAttr (addKeyValueToAttr attr ("title", tit))
             ("alt", render (Just (writerColumns opts)) alt)
                  | otherwise = empty

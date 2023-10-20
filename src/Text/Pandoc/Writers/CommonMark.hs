@@ -1,6 +1,6 @@
 {- |
    Module      : Text.Pandoc.Writers.CommonMark
-   Copyright   : Copyright (C) 2015-2022 John MacFarlane
+   Copyright   : Copyright (C) 2015-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -14,4 +14,3 @@ CommonMark:  <http://commonmark.org>
 module Text.Pandoc.Writers.CommonMark (writeCommonMark) where
 
 import Text.Pandoc.Writers.Markdown (writeCommonMark)
-

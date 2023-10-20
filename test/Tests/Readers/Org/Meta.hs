@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Meta
-   Copyright   : © 2014-2022 Albert Krewinkel
+   Copyright   : © 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -208,12 +208,19 @@ tests =
       ]
 
     , testGroup "emphasis config"
-      [ "Changing pre and post chars for emphasis" =:
-        T.unlines [ "#+pandoc-emphasis-pre: \"[)\""
-                  , "#+pandoc-emphasis-post: \"]\\n\""
-                  , "([/emph/])*foo*"
+      [ "Changing pre chars for emphasis" =:
+        T.unlines [ "#+pandoc-emphasis-pre: \"[)$a1%\""
+                  , "[/emph/.)*strong*.a~code~"
                   ] =?>
-        para ("([" <> emph "emph" <> "])" <> strong "foo")
+        para ("[" <> emph "emph" <> ".)" <> strong "strong" <>
+              ".a" <> code "code")
+
+      , "Changing post chars for emphasis" =:
+        T.unlines [ "#+pandoc-emphasis-post: \"(]$a1%\""
+                  , "/emph/('*strong*]'~code~a"
+                  ] =?>
+        para (emph "emph" <> "('" <> strong "strong" <> "]'" <>
+              code "code" <> "a")
 
       , "setting an invalid value restores the default" =:
         T.unlines [ "#+pandoc-emphasis-pre: \"[\""

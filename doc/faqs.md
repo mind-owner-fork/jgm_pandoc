@@ -116,11 +116,11 @@ and saving in a format from which pandoc can convert directly.
 No.  You can get by with a relatively small TeX installation,
 for example, by starting with MacTeX's Basic TeX distribution
 and using the `tlmgr` tool to install a few packages required by pandoc
-(see https://pandoc.org/MANUAL.html#creating-a-pdf).
+(see [the manual](https://pandoc.org/MANUAL.html#creating-a-pdf)).
 
 Or, you can produce PDFs via HTML and `wkhtmltopdf`,
 or via groff ms and `pdfroff`.  (These don't produce as nice
-topography as TeX, particularly when it comes to math, but they
+typography as TeX, particularly when it comes to math, but they
 may be fine for many purposes.)
 
 
@@ -136,7 +136,7 @@ example,
 
 First, unless your target is a binary format (docx, odt, epub),
 you must use either `--extract-media` or (for HTML only)
-`--self-contained` to make the images in the ipynb container
+`--embed-resources` to make the images in the ipynb container
 available to your output file.
 
 Second, some Jupyter extensions, especially those that use JavaScript
@@ -148,6 +148,82 @@ can use:
 ```
 pandoc -s -o output.html input.ipynb \
 -V header-includes='<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js"></script>'
+```
+
+## How can I get BibTeX references to work when converting from LaTeX?
+
+Use the `--citeproc` option.
+If it still doesn't work, you may need to tell pandoc where
+your bibliography file is using `--bibliography`.
+Your references may not be formatted the same as they are
+when you use `latex` and `bibtex`; you can change the format
+of the citations by specifying an appropriate CSL bibliography
+style using `--csl`
+(see [the manual](https://pandoc.org/MANUAL.html#specifying-a-citation-style)).
+
+### How can I produce PDF/A with pandoc?
+
+The simplest approach is via ConTeXt:
+
+```
+pandoc --pdf-engine=context -V pdfa
+```
+
+Alternatively, `--pdf-engine=pdflatex` can be used with
+the following in `header-includes` in metadata (or included from
+a file using `--include-in-header`):
+
+```
+\usepackage[a-2u,mathxmp]{pdfx}
+\usepackage[pdfa]{hyperref}
+```
+
+Or `--pdf-engine=lualatex` can be used with the following:
+
+```
+\usepackage{hyperxmp}
+\hypersetup{pdfapart=3,pdfaconformance=B}
+\immediate\pdfobj stream attr{/N 3} file{sRGB.icc}
+\pdfcatalog{/OutputIntents [<<
+/Type /OutputIntent /S /GTS_PDFA1
+/DestOutputProfile \the\pdflastobj\space 0 R
+/OutputConditionIdentifier (sRGB) /Info (sRGB)
+>>]}
+```
+
+
+### Pandoc adds column widths to pipe tables when any line is wider than the setting for `--columns`. How can I prevent this?
+
+Save this filter as `nowidths.lua` and then pass `--lua-filter
+nowidths.lua` as an additional option to pandoc.
+(See [issue 8139](https://github.com/jgm/pandoc/issues/8139).)
+
+``` lua
+-- Unset the width attribute of HTML colspecs in tables
+-- See https://github.com/jgm/pandoc/issues/8139
+function Table (tbl)
+  if PANDOC_VERSION[1] >= 2 and PANDOC_VERSION[2] >= 10 then
+    tbl.colspecs = tbl.colspecs:map(function (colspec)
+        local align = colspec[1]
+        local width = nil  -- default width
+        return {align, width}
+    end)
+  else
+    for i, w in ipairs(tbl.widths) do
+      tbl.widths[i] = 0
+    end
+  end
+  return tbl
+end
+```
+
+### How can I use pandoc to read Word files in the old .DOC format?
+
+Install `antiword` and use it to convert the doc to DocBook,
+which can be read by pandoc.
+
+```
+antiword -x db input.doc | pandoc -f docbook
 ```
 
 :::

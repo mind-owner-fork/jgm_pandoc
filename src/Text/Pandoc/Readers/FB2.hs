@@ -25,7 +25,7 @@ TODO:
 module Text.Pandoc.Readers.FB2 ( readFB2 ) where
 import Control.Monad.Except (throwError)
 import Control.Monad.State.Strict
-import Data.ByteString.Base64.Lazy
+import Data.ByteString.Lazy.Base64
 import Data.Functor
 import Data.List (intersperse)
 import qualified Data.Map as M
@@ -34,7 +34,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
 import Data.Default
 import Data.Maybe
-import Text.HTML.TagSoup.Entity (lookupEntity)
+import Text.Pandoc.XML (lookupEntity)
 import Text.Pandoc.Builder
 import Text.Pandoc.Class.PandocMonad (PandocMonad, insertMedia, report)
 import Text.Pandoc.Error
@@ -88,7 +88,7 @@ removeHash t = case T.uncons t of
   _              -> t
 
 convertEntity :: Text -> Text
-convertEntity e = maybe (T.toUpper e) T.pack $ lookupEntity (T.unpack e)
+convertEntity e = fromMaybe (T.toUpper e) $ lookupEntity e
 
 parseInline :: PandocMonad m => Content -> FB2 m Inlines
 parseInline (Elem e) =
@@ -202,7 +202,7 @@ parseBinaryElement e =
       report $ IgnoredElement "binary without content-type attribute"
     (Just filename, contentType) ->
       insertMedia (T.unpack filename) contentType
-                    (decodeLenient
+                    (decodeBase64Lenient
                       (UTF8.fromTextLazy . TL.fromStrict . strContent $ e))
 
 -- * Type parsers

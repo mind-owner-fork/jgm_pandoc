@@ -1,9 +1,11 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 {- |
    Module      : Text.Pandoc.Writers.Shared
-   Copyright   : Copyright (C) 2013-2022 John MacFarlane
+   Copyright   : Copyright (C) 2013-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -22,6 +24,9 @@ module Text.Pandoc.Writers.Shared (
                      , defField
                      , getLang
                      , tagWithAttrs
+                     , htmlAddStyle
+                     , htmlAlignmentToString
+                     , htmlAttrs
                      , isDisplayMath
                      , fixDisplayMath
                      , unsmartify
@@ -37,14 +42,15 @@ module Text.Pandoc.Writers.Shared (
                      , endsWithPlain
                      , toLegacyTable
                      , splitSentences
+                     , ensureValidXmlIdentifiers
+                     , setupTranslations
                      )
 where
 import Safe (lastMay)
 import qualified Data.ByteString.Lazy as BL
-import Data.Maybe (fromMaybe, isNothing)
 import Control.Monad (zipWithM)
 import Data.Aeson (ToJSON (..), encode)
-import Data.Char (chr, ord, isSpace)
+import Data.Char (chr, ord, isSpace, isLetter, isUpper)
 import Data.List (groupBy, intersperse, transpose, foldl')
 import Data.List.NonEmpty (NonEmpty(..), nonEmpty)
 import Data.Text.Conversions (FromText(..))
@@ -52,15 +58,21 @@ import qualified Data.Map as M
 import qualified Data.Text as T
 import Data.Text (Text)
 import qualified Text.Pandoc.Builder as Builder
+import Text.Pandoc.CSS (cssAttributes)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.DocLayout
-import Text.Pandoc.Shared (stringify, makeSections, deNote, deLink, blocksToInlines)
-import Text.Pandoc.Walk (walk)
+import Text.Pandoc.Shared (stringify, makeSections, blocksToInlines)
+import Text.Pandoc.Walk (Walkable(..))
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Pandoc.XML (escapeStringForXML)
 import Text.DocTemplates (Context(..), Val(..), TemplateTarget,
                           ToContext(..), FromContext(..))
+import Text.Pandoc.Chunks (tocToList, toTOCTree)
+import Text.Collate.Lang (Lang (..))
+import Text.Pandoc.Class (PandocMonad, toLang)
+import Text.Pandoc.Translations (setTranslations)
+import Data.Maybe (fromMaybe)
 
 -- | Create template Context from a 'Meta' and an association list
 -- of variables, specified at the command line or in the writer.
@@ -164,10 +176,13 @@ getLang opts meta =
                _                                 -> Nothing
 
 -- | Produce an HTML tag with the given pandoc attributes.
-tagWithAttrs :: HasChars a => Text -> Attr -> Doc a
-tagWithAttrs tag (ident,classes,kvs) = hsep
-  ["<" <> text (T.unpack tag)
-  ,if T.null ident
+tagWithAttrs :: HasChars a => a -> Attr -> Doc a
+tagWithAttrs tag attr = "<" <> literal tag <> (htmlAttrs attr) <> ">"
+
+-- | Produce HTML for the given pandoc attributes, to be used in HTML tags
+htmlAttrs :: HasChars a => Attr -> Doc a
+htmlAttrs (ident, classes, kvs) = addSpaceIfNotEmpty (hsep [
+  if T.null ident
       then empty
       else "id=" <> doubleQuotes (text $ T.unpack ident)
   ,if null classes
@@ -175,7 +190,35 @@ tagWithAttrs tag (ident,classes,kvs) = hsep
       else "class=" <> doubleQuotes (text $ T.unpack (T.unwords classes))
   ,hsep (map (\(k,v) -> text (T.unpack k) <> "=" <>
                 doubleQuotes (text $ T.unpack (escapeStringForXML v))) kvs)
-  ] <> ">"
+  ])
+
+addSpaceIfNotEmpty :: HasChars a => Doc a -> Doc a
+addSpaceIfNotEmpty f = if isEmpty f then f else " " <> f
+
+-- | Adds a key-value pair to the @style@ attribute.
+htmlAddStyle :: (Text, Text) -> [(Text, Text)] -> [(Text, Text)]
+htmlAddStyle (key, value) kvs =
+  let cssToStyle = T.intercalate " " . map (\(k, v) -> k <> ": " <> v <> ";")
+  in case break ((== "style") . fst) kvs of
+    (_, []) ->
+      -- no style attribute yet, add new one
+      ("style", cssToStyle [(key, value)]) : kvs
+    (xs, (_,cssStyles):rest) ->
+      -- modify the style attribute
+      xs ++ ("style", cssToStyle modifiedCssStyles) : rest
+      where
+        modifiedCssStyles =
+          case break ((== key) . fst) $ cssAttributes cssStyles of
+            (cssAttribs, []) -> (key, value) : cssAttribs
+            (pre, _:post)    -> pre ++ (key, value) : post
+
+-- | Get the html representation of an alignment key
+htmlAlignmentToString :: Alignment -> Maybe Text
+htmlAlignmentToString = \case
+  AlignLeft    -> Just "left"
+  AlignRight   -> Just "right"
+  AlignCenter  -> Just "center"
+  AlignDefault -> Nothing
 
 -- | Returns 'True' iff the argument is an inline 'Math' element of type
 -- 'DisplayMath'.
@@ -230,21 +273,23 @@ unsmartify opts = T.concatMap $ \c -> case c of
   '\8216' -> "'"
   _       -> T.singleton c
 
+-- | Writes a grid table.
 gridTable :: (Monad m, HasChars a)
           => WriterOptions
-          -> (WriterOptions -> [Block] -> m (Doc a))
-          -> Bool -- ^ headless
-          -> [Alignment]
-          -> [Double]
-          -> [[Block]]
-          -> [[[Block]]]
+          -> (WriterOptions -> [Block] -> m (Doc a)) -- ^ format Doc writer
+          -> Bool             -- ^ headless
+          -> [Alignment]      -- ^ column alignments
+          -> [Double]         -- ^ column widths
+          -> [[Block]]        -- ^ table header row
+          -> [[[Block]]]      -- ^ table body rows
           -> m (Doc a)
 gridTable opts blocksToDoc headless aligns widths headers rows = do
   -- the number of columns will be used in case of even widths
   let numcols = maximum (length aligns :| length widths :
                            map length (headers:rows))
-  let officialWidthsInChars widths' = map (
-                        (\x -> if x < 1 then 1 else x) .
+  let officialWidthsInChars :: [Double] -> [Int]
+      officialWidthsInChars widths' = map (
+                        (max 1) .
                         (\x -> x - 3) . floor .
                         (fromIntegral (writerColumns opts) *)
                         ) widths'
@@ -424,31 +469,10 @@ toSubscript c
 toTableOfContents :: WriterOptions
                   -> [Block]
                   -> Block
-toTableOfContents opts bs =
-  BulletList $ filter (not . null)
-             $ map (sectionToListItem opts)
-             $ makeSections (writerNumberSections opts) Nothing bs
-
--- | Converts a section Div to a list item for a table of contents;
--- returns an empty list if the given block is not a section Div.
-sectionToListItem :: WriterOptions -> Block -> [Block]
-sectionToListItem opts (Div (ident,_,_)
-                         (Header lev (_,classes,kvs) ils : subsecs))
-  | lev <= writerTOCDepth opts
-  , not (isNothing (lookup "number" kvs) && "unlisted" `elem` classes)
-  = Plain headerLink : [BulletList listContents | not (null listContents)]
- where
-   num = fromMaybe "" $ lookup "number" kvs
-   addNumber  = if T.null num
-                   then id
-                   else (Span ("",["toc-section-number"],[])
-                           [Str num] :) . (Space :)
-   headerText' = addNumber $ walk (deLink . deNote) ils
-   headerLink = if T.null ident
-                   then headerText'
-                   else [Link ("toc-" <> ident, [], []) headerText' ("#" <> ident, "")]
-   listContents = filter (not . null) $ map (sectionToListItem opts) subsecs
-sectionToListItem _ _ = []
+toTableOfContents opts =
+  tocToList (writerNumberSections opts) (writerTOCDepth opts)
+  . toTOCTree
+  . makeSections (writerNumberSections opts) Nothing
 
 -- | Returns 'True' iff the list of blocks has a @'Plain'@ as its last
 -- element.
@@ -528,10 +552,10 @@ splitSentences :: Doc Text -> Doc Text
 splitSentences = go . toList
  where
   go [] = mempty
-  go (Text len t : BreakingSpace : xs) =
-     if isSentenceEnding t
-        then Text len t <> NewLine <> go xs
-        else Text len t <> BreakingSpace <> go xs
+  go (Text len t : AfterBreak _ : BreakingSpace : xs)
+    | isSentenceEnding t = Text len t <> NewLine <> go xs
+  go (Text len t : BreakingSpace : xs)
+    | isSentenceEnding t = Text len t <> NewLine <> go xs
   go (x:xs) = x <> go xs
 
   toList (Concat (Concat a b) c) = toList (Concat a (Concat b c))
@@ -541,9 +565,64 @@ splitSentences = go . toList
   isSentenceEnding t =
     case T.unsnoc t of
       Just (t',c)
-        | c == '.' || c == '!' || c == '?' -> True
+        | c == '.' || c == '!' || c == '?'
+        , not (isInitial t') -> True
         | c == ')' || c == ']' || c == '"' || c == '\x201D' ->
            case T.unsnoc t' of
-             Just (_,d) -> d == '.' || d == '!' || d == '?'
+             Just (t'',d) -> d == '.' || d == '!' || d == '?' &&
+                             not (isInitial t'')
              _ -> False
       _ -> False
+   where
+    isInitial x = T.length x == 1 && T.all isUpper x
+
+-- | Ensure that all identifiers start with a letter,
+-- and modify internal links accordingly. (Yes, XML allows an
+-- underscore, but HTML 4 doesn't, so we are more conservative.)
+ensureValidXmlIdentifiers :: Pandoc -> Pandoc
+ensureValidXmlIdentifiers = walk fixLinks . walkAttr fixIdentifiers
+ where
+  fixIdentifiers (ident, classes, kvs) =
+    (case T.uncons ident of
+      Nothing -> ident
+      Just (c, _) | isLetter c -> ident
+      _ -> "id_" <> ident,
+     classes, kvs)
+  needsFixing src =
+    case T.uncons src of
+      Just ('#',t) ->
+        case T.uncons t of
+          Just (c,_) | not (isLetter c) -> Just ("#id_" <> t)
+          _ -> Nothing
+      _ -> Nothing
+  fixLinks (Link attr ils (src, tit))
+    | Just src' <- needsFixing src = Link attr ils (src', tit)
+  fixLinks (Image attr ils (src, tit))
+    | Just src' <- needsFixing src = Image attr ils (src', tit)
+  fixLinks x = x
+
+-- | Walk Pandoc document, modifying attributes.
+walkAttr :: (Attr -> Attr) -> Pandoc -> Pandoc
+walkAttr f = walk goInline . walk goBlock
+ where
+  goInline (Span attr ils) = Span (f attr) ils
+  goInline (Link attr ils target) = Link (f attr) ils target
+  goInline (Image attr ils target) = Image (f attr) ils target
+  goInline (Code attr txt) = Code (f attr) txt
+  goInline x = x
+
+  goBlock (Header lev attr ils) = Header lev (f attr) ils
+  goBlock (CodeBlock attr txt) = CodeBlock (f attr) txt
+  goBlock (Table attr cap colspecs thead tbodies tfoot) =
+    Table (f attr) cap colspecs thead tbodies tfoot
+  goBlock (Div attr bs) = Div (f attr) bs
+  goBlock x = x
+
+-- | Set translations based on the `lang` in metadata.
+setupTranslations :: PandocMonad m => Meta -> m ()
+setupTranslations meta = do
+  let defLang = Lang "en" (Just "US") Nothing [] [] []
+  lang <- case lookupMetaString "lang" meta of
+            "" -> pure defLang
+            s  -> fromMaybe defLang <$> toLang (Just s)
+  setTranslations lang

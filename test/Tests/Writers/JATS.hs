@@ -3,6 +3,7 @@ module Tests.Writers.JATS (tests) where
 
 import Data.Text (Text)
 import Test.Tasty
+import Test.Tasty.HUnit (HasCallStack)
 import Tests.Helpers
 import Text.Pandoc
 import Text.Pandoc.Arbitrary ()
@@ -10,7 +11,7 @@ import Text.Pandoc.Builder
 import qualified Data.Text as T
 
 jats :: (ToPandoc a) => a -> Text
-jats = purely (writeJATS def{ writerWrapText = WrapNone })
+jats = purely (writeJatsArchiving def{ writerWrapText = WrapNone })
      . toPandoc
 
 jatsArticleAuthoring :: (ToPandoc a) => a -> Text
@@ -31,7 +32,7 @@ which is in turn shorthand for
 -}
 
 infix 4 =:
-(=:) :: (ToString a, ToPandoc a)
+(=:) :: (ToString a, ToPandoc a, HasCallStack)
      => String -> (a, Text) -> TestTree
 (=:) = test jats
 
@@ -39,7 +40,6 @@ tests :: [TestTree]
 tests =
   [ testGroup "inline code"
     [ "basic" =: code "@&" =?> "<p><monospace>@&amp;</monospace></p>"
-    , "lang" =: codeWith ("", ["c"], []) "@&" =?> "<p><code language=\"c\">@&amp;</code></p>"
     ]
   , testGroup "block code"
     [ "basic" =: codeBlock "@&" =?> "<preformat>@&amp;</preformat>"
@@ -87,7 +87,7 @@ tests =
         , "      <fig>"
         , "        <caption><p>caption</p></caption>"
         , "        <graphic mimetype=\"image\" mime-subtype=\"png\"" <>
-          " xlink:href=\"a.png\" xlink:title=\"\" />"
+          " xlink:href=\"a.png\" />"
         , "      </fig>"
         , "    </p>"
         , "  </list-item>"
@@ -133,7 +133,9 @@ tests =
     , "containing image" =:
       header 1 (image "imgs/foo.jpg" "" (text "Alt text")) =?>
       "<sec>\n\
-      \  <title><inline-graphic mimetype=\"image\" mime-subtype=\"jpeg\" xlink:href=\"imgs/foo.jpg\" /></title>\n\
+      \  <title><inline-graphic mimetype=\"image\" mime-subtype=\"jpeg\" xlink:href=\"imgs/foo.jpg\">\n\
+      \    <alt-text>Alt text</alt-text>\n\
+      \  </inline-graphic></title>\n\
       \</sec>"
     ]
 

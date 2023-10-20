@@ -3,6 +3,7 @@ module Tests.Writers.LaTeX (tests) where
 
 import Data.Text (unpack)
 import Test.Tasty
+import Test.Tasty.HUnit (HasCallStack)
 import Tests.Helpers
 import Text.Pandoc
 import Text.Pandoc.Arbitrary ()
@@ -33,7 +34,7 @@ which is in turn shorthand for
 -}
 
 infix 4 =:
-(=:) :: (ToString a, ToPandoc a)
+(=:) :: (ToString a, ToPandoc a, HasCallStack)
      => String -> (a, String) -> TestTree
 (=:) = test latex
 
@@ -49,7 +50,7 @@ tests = [ testGroup "code blocks"
         , testGroup "definition lists"
           [ "with internal link" =: definitionList [(link "#go" "" (str "testing"),
              [plain (text "hi there")])] =?>
-            "\\begin{description}\n\\tightlist\n\\item[{\\protect\\hyperlink{go}{testing}}]\nhi there\n\\end{description}"
+            "\\begin{description}\n\\tightlist\n\\item[{\\hyperref[go]{testing}}]\nhi there\n\\end{description}"
           ]
         , testGroup "math"
           [ "escape |" =: para (math "\\sigma|_{\\{x\\}}") =?>
@@ -59,7 +60,7 @@ tests = [ testGroup "code blocks"
           [ "unnumbered header" =:
             headerWith ("foo",["unnumbered"],[]) 1
               (text "Header 1" <> note (plain $ text "note")) =?>
-            "\\hypertarget{foo}{%\n\\section*{\\texorpdfstring{Header 1\\footnote{note}}{Header 1}}\\label{foo}}\n\\addcontentsline{toc}{section}{Header 1}\n"
+            "\\section*{\\texorpdfstring{Header 1\\footnote{note}}{Header 1}}\\label{foo}\n\\addcontentsline{toc}{section}{Header 1}\n"
           , "in list item" =:
             bulletList [header 2 (text "foo")] =?>
             "\\begin{itemize}\n\\item ~\n  \\subsection{foo}\n\\end{itemize}"
@@ -75,11 +76,11 @@ tests = [ testGroup "code blocks"
           [ "struck out and highlighted" =:
             strikeout (codeWith ("",["haskell"],[]) "foo" <> space
               <> str "bar") =?>
-            "\\sout{\\mbox{\\VERB|\\NormalTok{foo}|} bar}"
+            "\\st{\\mbox{\\VERB|\\NormalTok{foo}|} bar}"
           , "struck out and not highlighted" =:
             strikeout (code "foo" <> space
               <> str "bar") =?>
-            "\\sout{\\mbox{\\texttt{foo}} bar}"
+            "\\st{\\mbox{\\texttt{foo}} bar}"
           , "single quotes" =:
               code "dog's" =?> "\\texttt{dog\\textquotesingle{}s}"
           , "backtick" =:

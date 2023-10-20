@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Shared
-   Copyright   : © 2006-2022 John MacFarlane
+   Copyright   : © 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -15,6 +15,7 @@ module Tests.Shared (tests) where
 import System.FilePath.Posix (joinPath)
 import Test.Tasty
 import Text.Pandoc.Arbitrary ()
+import Test.Tasty.QuickCheck (testProperty)
 import Text.Pandoc.Builder
 import Text.Pandoc.Shared
 import Test.Tasty.HUnit
@@ -33,7 +34,21 @@ tests = [ testGroup "compactifyDL"
         , testGroup "collapseFilePath" testCollapse
         , testGroup "toLegacyTable" testLegacyTable
         , testGroup "table of contents" testTOC
-        ] 
+        , testGroup "makeSections"
+          [ testProperty "makeSections is idempotent" makeSectionsIsIdempotent
+          , testCase "makeSections is idempotent for test case" $
+              let d = header 1 "H1" <> header 2 "H2" <> header 3 "H3" <>
+                      header 2 "H2a" <> header 4 "H4" <> header 1 "H1a"
+                  d' = makeSections False Nothing $ toList d
+               in assertBool "makeSections is idempotent for test case"
+                      (makeSections False Nothing d' == d')
+          ]
+        ]
+
+makeSectionsIsIdempotent :: [Block] -> Bool
+makeSectionsIsIdempotent d =
+  let d' = makeSections False Nothing d
+   in d' == makeSections False Nothing d'
 
 givesTOC :: String -> (Blocks, Blocks) -> TestTree
 givesTOC desc (blocks, toc) = test (toTableOfContents def) desc (toList blocks, head . toList $ toc)
@@ -58,11 +73,11 @@ testTOC = [ givesTOC "empty case" $ mempty =?> bulletList []
               bulletList [plain "H1a" <> bulletList [plain "H2"]]
           , givesTOC "only referenced headers" $
               header 1 "H1a" <> headerId "h2" 2 "H2" =?>
-              bulletList [plain "H1a" <> 
+              bulletList [plain "H1a" <>
                           bulletList [plain $ linkId "toc-h2" "#h2" "" "H2"]]
           , givesTOC "section id used as backup" $
               divWith ("sec",["section"],[]) (header 1 "H1") =?>
-              bulletList [plain $ linkId "toc-sec" "#sec" "" "H1"]             
+              bulletList [plain $ linkId "toc-sec" "#sec" "" "H1"]
           ]
 
 testCollapse :: [TestTree]

@@ -1,8 +1,10 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE TupleSections     #-}
 {- |
    Module      : Text.Pandoc.SelfContained
-   Copyright   : Copyright (C) 2011-2022 John MacFarlane
+   Copyright   : Copyright (C) 2011-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,13 +18,13 @@ the HTML using data URIs.
 module Text.Pandoc.SelfContained ( makeDataURI, makeSelfContained ) where
 import Codec.Compression.GZip as Gzip
 import Control.Applicative ((<|>))
-import Control.Monad.Trans (lift)
 import Data.ByteString (ByteString)
-import Data.ByteString.Base64
+import Data.ByteString.Base64 (encodeBase64)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import qualified Data.Text as T
 import Data.Char (isAlphaNum, isAscii)
+import Data.Digest.Pure.SHA (sha1, showDigest)
 import Network.URI (escapeURIString)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 import Text.HTML.TagSoup
@@ -31,11 +33,17 @@ import Text.Pandoc.Class.PandocMonad (PandocMonad (..), fetchItem,
 import Text.Pandoc.Logging
 import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.MIME (MimeType)
-import Text.Pandoc.Shared (isURI, renderTags', trim, tshow)
+import Text.Pandoc.Shared (renderTags', trim, tshow, safeRead)
+import Text.Pandoc.URI (isURI)
 import Text.Pandoc.UTF8 (toString, toText, fromText)
-import Text.Parsec (ParsecT, runParserT)
+import Text.Pandoc.Parsing (ParsecT, runParserT)
+import qualified Text.Pandoc.Parsing as P
 import Control.Monad.Except (throwError, catchError)
-import qualified Text.Parsec as P
+import Data.Either (lefts, rights)
+import Data.Maybe (isNothing)
+import qualified Data.Map as M
+import Control.Monad.State
+-- import Debug.Trace
 
 isOk :: Char -> Bool
 isOk c = isAscii c && isAlphaNum c
@@ -44,7 +52,7 @@ makeDataURI :: (MimeType, ByteString) -> T.Text
 makeDataURI (mime, raw) =
   if textual
      then "data:" <> mime' <> "," <> T.pack (escapeURIString isOk (toString raw))
-     else "data:" <> mime' <> ";base64," <> toText (encode raw)
+     else "data:" <> mime' <> ";base64," <> encodeBase64 raw
   where textual = "text/" `T.isPrefixOf` mime
         mime' = if textual && T.any (== ';') mime
                    then mime <> ";charset=utf-8"
@@ -58,10 +66,25 @@ isSourceAttribute tagname (x,_) =
   x == "poster" ||
   x == "data-background-image"
 
-convertTags :: PandocMonad m => [Tag T.Text] -> m [Tag T.Text]
+data ConvertState =
+  ConvertState
+  { isHtml5 :: Bool
+  , svgMap  :: M.Map T.Text (T.Text, [Attribute T.Text])
+    -- map from hash to (id, svg attributes)
+  } deriving (Show)
+
+convertTags :: PandocMonad m =>
+               [Tag T.Text] -> StateT ConvertState m [Tag T.Text]
 convertTags [] = return []
 convertTags (t@TagOpen{}:ts)
   | fromAttrib "data-external" t == "1" = (t:) <$> convertTags ts
+convertTags (t@(TagOpen "style" _):ts) =
+  case span isTagText ts of
+    (xs,rest) -> do
+      xs' <- mapM (\case
+                    TagText s -> TagText . toText <$> cssURLs "" (fromText s)
+                    tag -> return tag) xs
+      ((t:xs') ++) <$> convertTags rest
 convertTags (t@(TagOpen "script" as):tc@(TagClose "script"):ts) =
   case fromAttrib "src" t of
        ""  -> (t:) <$> convertTags ts
@@ -123,19 +146,97 @@ convertTags (t@(TagOpen tagname as):ts)
   | any (isSourceAttribute tagname) as
      = do
        as' <- mapM processAttribute as
+       let attrs = rights as'
+       let svgContents = lefts as'
        rest <- convertTags ts
-       return $ TagOpen tagname as' : rest
+       case svgContents of
+         [] -> return $ TagOpen tagname attrs : rest
+         ((hash, tags) : _) -> do
+             -- drop "</img>" if present
+             let rest' = case rest of
+                           TagClose tn : xs | tn == tagname ->  xs
+                           _ -> rest
+             svgmap <- gets svgMap
+             case M.lookup hash svgmap of
+               Just (svgid, svgattrs) -> do
+                 let attrs' = combineSvgAttrs svgattrs attrs
+                 return $ TagOpen "svg" attrs' :
+                          TagOpen "use" [("href", "#" <> svgid)] :
+                          TagClose "use" :
+                          TagClose "svg" :
+                          rest'
+               Nothing ->
+                  case dropWhile (not . isTagOpenName "svg") tags of
+                    TagOpen "svg" svgattrs : tags' -> do
+                      let attrs' = combineSvgAttrs svgattrs attrs
+                      let svgid = case lookup "id" attrs' of
+                                     Just id' -> id'
+                                     Nothing -> "svg_" <> hash
+                      let attrs'' = [(k,v) | (k,v) <- attrs', k /= "id"]
+                      modify $ \st ->
+                        st{ svgMap = M.insert hash (svgid, attrs'') (svgMap st) }
+                      return $ TagOpen "svg" attrs'' : tags' ++ rest'
+                    _ -> return $ TagOpen tagname attrs : rest
   where processAttribute (x,y) =
            if isSourceAttribute tagname (x,y)
               then do
                 res <- getData (fromAttrib "type" t) y
                 case res of
-                  AlreadyDataURI enc -> return (x, enc)
-                  Fetched (mt,bs) -> return (x, makeDataURI (mt,bs))
-                  CouldNotFetch _ -> return (x, y)
-              else return (x,y)
+                  AlreadyDataURI enc -> return $ Right (x, enc)
+                  Fetched ("image/svg+xml", bs) -> do
+                    -- we filter CR in the hash to ensure that Windows
+                    -- and non-Windows tests agree:
+                    let hash = T.pack $ take 20 $ showDigest $
+                                        sha1 $ L.fromStrict
+                                             $ B.filter (/='\r') bs
+                    return $ Left (hash, getSvgTags (toText bs))
+                  Fetched (mt,bs) -> return $ Right (x, makeDataURI (mt,bs))
+                  CouldNotFetch _ -> return $ Right (x, y)
+              else return $ Right (x,y)
 
 convertTags (t:ts) = (t:) <$> convertTags ts
+
+-- we want to drop spaces, <?xml>, and comments before <svg>
+-- and anything after </svg>:
+getSvgTags :: T.Text -> [Tag T.Text]
+getSvgTags t =
+  case takeWhile (not . isTagCloseName "svg") .
+       dropWhile (not . isTagOpenName "svg") $ parseTags t of
+    [] -> []
+    xs -> xs ++ [TagClose "svg"]
+
+combineSvgAttrs :: [(T.Text, T.Text)] -> [(T.Text, T.Text)] -> [(T.Text, T.Text)]
+combineSvgAttrs svgAttrs imgAttrs =
+  case (mbViewBox, mbHeight, mbWidth) of
+    (Nothing, Just h, Just w) -> -- calculate viewBox
+      combinedAttrs ++ [("viewBox", T.unwords ["0", "0", tshow w, tshow h])]
+    (Just (_minx,_miny,w,h), Nothing, Nothing) ->
+        combinedAttrs ++
+        [ ("width", dropPointZero (tshow w)) |
+            isNothing (lookup "width" combinedAttrs) ] ++
+        [ ("height", dropPointZero (tshow h)) |
+            isNothing (lookup "height" combinedAttrs) ]
+    _ -> combinedAttrs
+ where
+  dropPointZero t = case T.stripSuffix ".0" t of
+                       Nothing -> t
+                       Just t' -> t'
+  combinedAttrs = imgAttrs ++
+    [(k, v) | (k, v) <- svgAttrs
+            , isNothing (lookup k imgAttrs)
+            , k `notElem` ["xmlns", "xmlns:xlink", "version"]]
+  parseViewBox t =
+    case map (safeRead . addZero) $ T.words t of
+      [Just llx, Just lly, Just urx, Just ury] -> Just (llx, lly, urx, ury)
+      _ -> Nothing
+  addZero t =
+    if "-." `T.isPrefixOf` t
+       then "-0." <> T.drop 2 t -- safeRead fails on -.33, needs -0.33
+       else t
+  (mbViewBox :: Maybe (Double, Double, Double, Double)) =
+        lookup "viewBox" svgAttrs >>= parseViewBox
+  (mbHeight :: Maybe Int) = lookup "height" combinedAttrs >>= safeRead
+  (mbWidth :: Maybe Int) = lookup "width" combinedAttrs >>= safeRead
 
 cssURLs :: PandocMonad m
         => FilePath -> ByteString -> m ByteString
@@ -284,5 +385,10 @@ getData mimetype src
 makeSelfContained :: PandocMonad m => T.Text -> m T.Text
 makeSelfContained inp = do
   let tags = parseTags inp
-  out' <- convertTags tags
+  let html5 = case tags of
+                  (TagOpen "!DOCTYPE" [("html","")]:_) -> True
+                  _ -> False
+  let convertState = ConvertState { isHtml5 = html5,
+                                    svgMap = mempty }
+  out' <- evalStateT (convertTags tags) convertState
   return $ renderTags' out'

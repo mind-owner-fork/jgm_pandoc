@@ -30,7 +30,7 @@ executable.
 
 Starting with version 2.0, pandoc makes it possible to write
 filters in Lua without any external dependencies at all. A Lua
-interpreter (version 5.3) and a Lua library for creating pandoc
+interpreter (version 5.4) and a Lua library for creating pandoc
 filters is built into the pandoc executable. Pandoc data types
 are marshaled to Lua directly, avoiding the overhead of writing
 JSON to stdout and reading it from stdin.
@@ -42,7 +42,7 @@ to small caps:
 return {
   {
     Strong = function (elem)
-      return pandoc.SmallCaps(elem.c)
+      return pandoc.SmallCaps(elem.content)
     end,
   }
 }
@@ -52,7 +52,7 @@ or equivalently,
 
 ``` lua
 function Strong(elem)
-  return pandoc.SmallCaps(elem.c)
+  return pandoc.SmallCaps(elem.content)
 end
 ```
 
@@ -269,7 +269,12 @@ variables.
     be picked up by pandoc.
     ([WriterOptions](#type-writeroptions))
 
-    This variable is also set in custom writers.
+    Accessing this variable in **custom writers** is
+    **deprecated**. Starting with pandoc 3.0, it is set to a
+    placeholder value (the default options) in custom writers.
+    Access to the actual writer options is provided via the
+    `Writer` or `ByteStringWriter` function, to which the options
+    are passed as the second function argument.
 
     *Since: pandoc 2.17*
 
@@ -311,7 +316,7 @@ variables.
 :   This variable holds the `lpeg` module, a package based on
     Parsing Expression Grammars (PEG).  It provides excellent
     parsing utilities and is documented on the official [LPeg
-    homepage].  Pandoc uses a built-int version of the library,
+    homepage].  Pandoc uses a built-in version of the library,
     unless it has been configured by the package maintainer to
     rely on a system-wide installation.
 
@@ -395,26 +400,79 @@ colon syntax (`mystring:uc_upper()`).
 
 # Debugging Lua filters
 
+William Lupton has written a Lua module with some handy
+functions for debugging Lua filters, including functions
+that can pretty-print the Pandoc AST elements manipulated
+by the filters: it is available at
+<https://github.com/wlupton/pandoc-lua-logging>.
+
 It is possible to use a debugging interface to halt execution and
 step through a Lua filter line by line as it is run inside Pandoc.
 This is accomplished using the remote-debugging interface of the
 package [`mobdebug`](https://github.com/pkulchenko/MobDebug).
 Although mobdebug can be run from the terminal, it is more useful
-run within the donation-ware Lua editor and IDE,
-[ZeroBrane](https://studio.zerobrane.com/). ZeroBrane offers a
-REPL console and UI to step-through and view all variables and
-state.
+run within the donation-ware Lua editor and IDE, [ZeroBrane
+Studio](https://studio.zerobrane.com/). ZeroBrane offers a REPL
+console and UI to step-through and view all variables and state.
 
-If you already have Lua 5.3 installed, you can add
-[`mobdebug`](https://luarocks.org/modules/paulclinger/mobdebug)
-and its dependency
-[`luasocket`](https://luarocks.org/modules/luasocket/luasocket)
-using [`luarocks`](https://luarocks.org), which should then be
-available on the path. ZeroBrane also includes both of these in
-its package, so if you don't want to install Lua separately, you
-should add/modify your `LUA_PATH` and `LUA_CPATH` to include the
-correct locations; [see detailed instructions
-here](https://studio.zerobrane.com/doc-remote-debugging).
+ZeroBrane doesn't come with Lua 5.4 bundled, but it can debug it, so
+you should install Lua 5.4, and then add
+[`mobdebug`](https://luarocks.org/modules/paulclinger/mobdebug) and
+its dependency
+[`luasocket`](https://luarocks.org/modules/luasocket/luasocket) using
+[`luarocks`](https://luarocks.org). ZeroBrane can use your Lua 5.4
+install by adding `path.lua = "/path/to/your/lua"` in your ZeroBrane
+settings file. Next, open your Lua filter in ZeroBrane, and add
+`require('mobdebug').start()` at the line where you want your
+breakpoint. Then make sure the Project > Lua Intepreter is set to the
+"Lua" you added in settings and enable "Start Debugger Server" [see
+detailed instructions
+here](https://studio.zerobrane.com/doc-remote-debugging). Run Pandoc
+as you normally would, and ZeroBrane should break at the correct line.
+
+## Common pitfalls
+
+AST elements not updated
+:   A filtered element will only be updated if the filter
+    function returns a new element to replace it. A function like
+    the below has no effect, as the function returns no value:
+
+    ``` lua
+    function Str (str)
+      str.text = string.upper(str.text)
+    end
+    ```
+
+    The correct version would be
+
+    ``` lua
+    function Str (str)
+      str.text = string.upper(str.text)
+      return str
+    end
+    ```
+
+Pattern behavior is locale dependent
+:   The character classes in Lua's pattern library depend on the
+    current locale: E.g., the character `©` will be treated as
+    punctuation, and matched by the pattern `%p`, on CP-1252
+    locales, but not on systems using a UTF-8 locale.
+
+    A reliable way to ensure unified handling of patterns and
+    character classes is to use the "C" locale by adding
+    `os.setlocale 'C'` to the top of the Lua script.
+
+String library is not Unicode aware
+:   Lua's `string` library treats each byte as a single
+    character. A function like `string.upper` will not have the
+    intended effect when applied to words with non-ASCII
+    characters. Similarly, a pattern like `[☃]` will match *any*
+    of the bytes `\240`, `\159`, `\154`, and `\178`, but
+    **won't** match the "snowman" Unicode character.
+
+    Use the [pandoc.text](#module-text) module for Unicode-aware
+    transformation, and consider using using the lpeg or re
+    library for pattern matching.
 
 # Examples
 
@@ -549,7 +607,7 @@ If the contents of file `occupations.md` is
 ``` markdown
 ---
 name: Samuel Q. Smith
-occupation: Professor of Phrenology
+occupation: Professor of Oenology
 ---
 
 Name
@@ -570,7 +628,7 @@ will output:
 <dd><p><span>Samuel Q. Smith</span></p>
 </dd>
 <dt>Occupation</dt>
-<dd><p><span>Professor of Phrenology</span></p>
+<dd><p><span>Professor of Oenology</span></p>
 </dd>
 </dl>
 ```
@@ -686,7 +744,7 @@ Images are added to the mediabag. For output to binary formats,
 pandoc will use images in the mediabag. For textual formats, use
 `--extract-media` to specify a directory where the files in the
 mediabag will be written, or (for HTML only) use
-`--self-contained`.
+`--embed-resources`.
 
 ``` lua
 -- Pandoc filter to process code blocks with class "abc" containing
@@ -694,7 +752,7 @@ mediabag will be written, or (for HTML only) use
 --
 -- * Assumes that abcm2ps and ImageMagick's convert are in the path.
 -- * For textual output formats, use --extract-media=abc-images
--- * For HTML formats, you may alternatively use --self-contained
+-- * For HTML formats, you may alternatively use --embed-resources
 
 local filetypes = { html = {"png", "image/png"}
                   , latex = {"pdf", "application/pdf"}
@@ -859,7 +917,9 @@ equal in Lua if and only if they are equal in Haskell.
 Applies a Lua filter to the Pandoc element. Just as for
 full-document filters, the order in which elements are traversed
 can be controlled by setting the `traverse` field of the filter;
-see the section on [traversal order][Traversal order].
+see the section on [traversal order][Traversal order]. Returns a
+(deep) copy on which the filter has been applied: the original
+element is left untouched.
 
 Parameters:
 
@@ -935,7 +995,9 @@ Haskell.
 Applies a Lua filter to the block element. Just as for
 full-document filters, the order in which elements are traversed
 can be controlled by setting the `traverse` field of the filter;
-see the section on [traversal order][Traversal order].
+see the section on [traversal order][Traversal order]. Returns a
+(deep) copy on which the filter has been applied: the original
+element is left untouched.
 
 Note that the filter is applied to the subtree, but not to the
 `self` block element. The rationale is that otherwise the element
@@ -1062,6 +1124,36 @@ Fields:
 `tag`, `t`
 :   the literal `Div` (string)
 
+### Figure {#type-figure}
+
+Figure with caption and arbitrary block contents.
+
+Values of this type can be created with the
+[`pandoc.Figure`](#pandoc.figure) constructor.
+
+Fields:
+
+`content`
+:   block content ([Blocks][])
+
+`caption`
+:   figure caption ([Caption][])
+
+`attr`
+:   element attributes ([Attr][])
+
+`identifier`
+:   alias for `attr.identifier` (string)
+
+`classes`
+:   alias for `attr.classes` ([List][] of strings)
+
+`attributes`
+:   alias for `attr.attributes` ([Attributes][])
+
+`tag`, `t`
+:   the literal `Figure` (string)
+
 ### Header {#type-header}
 
 Creates a header element.
@@ -1120,17 +1212,6 @@ Fields:
 
 `tag`, `t`
 :   the literal `LineBlock` (string)
-
-### Null {#type-null}
-
-A null element; this element never produces any output in the
-target format.
-
-Values of this type can be created with the
-[`pandoc.Null`](#pandoc.null) constructor.
-
-`tag`, `t`
-:   the literal `Null` (string)
 
 ### OrderedList {#type-orderedlist}
 
@@ -1284,7 +1365,9 @@ values:
 Applies a Lua filter to the Blocks list. Just as for
 full-document filters, the order in which elements are traversed
 can be controlled by setting the `traverse` field of the filter;
-see the section on [traversal order][Traversal order].
+see the section on [traversal order][Traversal order]. Returns a
+(deep) copy on which the filter has been applied: the original
+list is left untouched.
 
 Parameters:
 
@@ -1319,7 +1402,9 @@ Haskell.
 Applies a Lua filter to the Inline element. Just as for
 full-document filters, the order in which elements are traversed
 can be controlled by setting the `traverse` field of the filter;
-see the section on [traversal order][Traversal order].
+see the section on [traversal order][Traversal order]. Returns a
+(deep) copy on which the filter has been applied: the original
+element is left untouched.
 
 Note that the filter is applied to the subtree, but not to the
 `self` inline element. The rationale is that otherwise the
@@ -1716,7 +1801,7 @@ Fields:
 List of [Inline] elements, with the same methods as a generic
 [List](#type-list). It is usually not necessary to create values
 of this type in user scripts, as pandoc can convert other types
-into Blocks wherever a value of this type is expected:
+into Inlines wherever a value of this type is expected:
 
 -   lists of [Inline] (or Inline-like) values are used directly;
 -   single [Inline] values are converted into a list containing
@@ -1740,7 +1825,9 @@ values:
 Applies a Lua filter to the Inlines list. Just as for
 full-document filters, the order in which elements are handled
 are are Inline → Inlines → Block → Blocks. The filter is applied
-to all list items *and* to the list itself.
+to all list items *and* to the list itself. Returns a (deep)
+copy on which the filter has been applied: the original list is
+left untouched.
 
 Parameters:
 
@@ -2028,6 +2115,9 @@ Pandoc writer options
 
 Fields:
 
+`chunk_template`
+:   Template used to generate chunked HTML filenames (string)
+
 `cite_method`
 :   How to print cites -- one of 'citeproc', 'natbib', or
     'biblatex' (string)
@@ -2313,6 +2403,8 @@ Usage:
 [Citations]: #type-citation
 [ColSpec]: #type-colspec
 [CommonState]: #type-commonstate
+[Div]: #type-div
+[Figure]: #type-figure
 [Image]: #type-image
 [Inline]: #type-inline
 [Inlines]: #type-inlines
@@ -2335,57 +2427,86 @@ Usage:
 [TableHead]: #type-tablehead
 [Version]: #type-version
 
-# Module text
+## Chunk {#type-chunk}
 
-UTF-8 aware text manipulation functions, implemented in Haskell.
-The module is made available as part of the `pandoc` module via
-`pandoc.text`. The text module can also be loaded explicitly:
+Part of a document; usually chunks are each written to a separate
+file.
 
-``` lua
--- uppercase all regular text in a document:
-text = require 'text'
-function Str (s)
-  s.text = text.upper(s.text)
-  return s
-end
-```
+Fields:
 
-### lower {#text.lower}
+`heading`
+:   heading text ([Inlines][])
 
-`lower (s)`
+`id`
+:   identifier (string)
 
-Returns a copy of a UTF-8 string, converted to lowercase.
+`level`
+:   level of topmost heading in chunk (integer)
 
-### upper {#text.upper}
+`number`
+:   chunk number (integer)
 
-`upper (s)`
+`section_number`
+:   hierarchical section number (string)
 
-Returns a copy of a UTF-8 string, converted to uppercase.
+`path`
+:   target filepath for this chunk (string)
 
-### reverse {#text.reverse}
+`up`
+:   link to the enclosing section, if any ([Chunk][]|nil)
 
-`reverse (s)`
+`prev`
+:   link to the previous section, if any ([Chunk][]|nil)
 
-Returns a copy of a UTF-8 string, with characters reversed.
+`next`
+:   link to the next section, if any ([Chunk][]|nil)
 
-### len {#text.len}
+`unlisted`
+:   whether the section in this chunk should be listed in the TOC
+    even if the chunk has no section number. (boolean)
 
-`len (s)`
+`contents`
+:   the chunk's block contents ([Blocks][])
 
-Returns the length of a UTF-8 string.
+## ChunkedDoc {#type-chunkeddoc}
 
-### sub {#text.sub}
+A Pandoc document divided into [Chunks]{#type-chunk}.
 
-`sub (s)`
+The table of contents info in field `toc` is rose-tree structure
+represented as a list. The node item is always placed at index
+`0`; subentries make up the rest of the list. Each node item
+contains the fields `title` ([Inlines][]), `number` (string|nil),
+`id` (string), `path` (string), and `level` (integer).
 
-Returns a substring of a UTF-8 string, using Lua's string
-indexing rules.
+Fields:
+
+`chunks`
+:   list of chunks that make up the document (list of
+    [Chunks](#type-chunk)).
+
+`meta`
+:   the document's metadata ([Meta][])
+
+`toc`
+:   table of contents information (table)
 
 # Module pandoc
 
-Lua functions for pandoc scripts; includes constructors for
+Fields and functions for pandoc scripts; includes constructors for
 document tree elements, functions to parse text in a given
 format, and functions to filter and modify a subtree.
+
+## Static Fields {#pandoc.fields}
+
+### readers {#pandoc.readers}
+
+Set of formats that pandoc can parse. All keys in this table can
+be used as the `format` value in `pandoc.read`.
+
+### writers {#pandoc.writers}
+
+Set of formats that pandoc can generate. All keys in this table
+can be used as the `format` value in `pandoc.write`.
 
 ## Pandoc
 
@@ -2560,6 +2681,23 @@ Parameters:
 
 Returns: [Div] object
 
+### `Figure (content[, caption[, attr]])` {#pandoc.figure}
+
+Creates a [Figure][] element.
+
+Parameters:
+
+`content`
+:   figure block content
+
+`caption`
+:   figure caption
+
+`attr`
+:   element attributes
+
+Returns: [Figure][] object
+
 ### `Header (level, content[, attr])` {#pandoc.header}
 
 Creates a header element.
@@ -2593,12 +2731,6 @@ Parameters:
 :   inline content
 
 Returns: [LineBlock] object
-
-### `Null ()` {#pandoc.null}
-
-Creates a null element.
-
-Returns: [Null] object
 
 ### `OrderedList (items[, listAttributes])` {#pandoc.orderedlist}
 
@@ -3372,6 +3504,8 @@ Usage:
 ### `walk_block (element, filter)` {#pandoc.walk_block}
 
 Apply a filter inside a block element, walking its contents.
+Returns a (deep) copy on which the filter has been applied:
+the original element is left untouched.
 
 Parameters:
 
@@ -3387,6 +3521,8 @@ Returns: the transformed block element
 ### `walk_inline (element, filter)` {#pandoc.walk_inline}
 
 Apply a filter inside an inline element, walking its contents.
+Returns a (deep) copy on which the filter has been applied:
+the original element is left untouched.
 
 Parameters:
 
@@ -3411,13 +3547,23 @@ reStructuredText, and Org, then these will be included in the
 resulting document. Any media elements are added to those
 retrieved from the other parsed input files.
 
+The `format` parameter defines the format flavor that will be
+parsed. This can be either a string, using `+` and `-` to enable
+and disable extensions, or a table with fields `format` (string)
+and `extensions` (table). The `extensions` table can be a list of
+all enabled extensions, or a table with extensions as keys and
+their activation status as values (`true` or `'enable'` to enable
+an extension, `false` or `'disable'` to disable it).
+
 Parameters:
 
 `markup`
-:   the markup to be parsed (string)
+:   the markup to be parsed (string|Sources)
 
 `format`
-:   format specification, defaults to `"markdown"` (string)
+:   format specification; defaults to `"markdown"`. See the
+    description above for a complete description of this
+    parameter. (string|table)
 
 `reader_options`
 :   options passed to the reader; may be a ReaderOptions object or
@@ -3448,7 +3594,9 @@ Parameters:
 :   document to convert ([Pandoc](#type-pandoc))
 
 `format`
-:   format specification, defaults to `'html'` (string)
+:   format specification; defaults to `"html"`. See the
+    documentation of [`pandoc.read`](#pandoc.read) for a complete
+    description of this parameter. (string|table)
 
 `writer_options`
 :   options passed to the writer; may be a WriterOptions object
@@ -3467,53 +3615,187 @@ Usage:
     local html = pandoc.write(doc, 'html')
     assert(html == "<p><strong>Tea</strong></p>")
 
+### `write_classic (doc[, writer_options])` {#pandoc.write_custom}
+
+Runs a classic custom Lua writer, using the functions defined
+in the current environment.
+
+Parameters:
+
+`doc`
+:   document to convert ([Pandoc](#type-pandoc))
+
+`writer_options`
+:   options passed to the writer; may be a [WriterOptions] object
+    or a table with a subset of the keys and values of a
+    WriterOptions object; defaults to the default values
+    documented in the manual. ([WriterOptions]|table)
+
+Returns:
+-   converted document (string)
+
+Usage:
+
+    -- Adding this function converts a classic writer into a
+    -- new-style custom writer.
+    function Writer (doc, opts)
+      PANDOC_DOCUMENT = doc
+      PANDOC_WRITER_OPTIONS = opts
+      loadfile(PANDOC_SCRIPT_FILE)()
+      return pandoc.write_classic(doc, opts)
+    end
+
 [WriterOptions]: #type-writeroptions
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.cli -->
+
+# Module pandoc.cli
+
+Command line options and argument parsing.
+
+## Fields {#pandoc.cli-fields}
+
+### default_options {#pandoc.cli.default_options}
+
+Default CLI options, using a JSON-like representation. (table)
+
+## Functions {#pandoc.cli-functions}
+
+### parse_options {#pandoc.cli.parse_options}
+
+`parse_options (args)`
+
+Parses command line arguments into pandoc options. Typically this
+function will be used in stand-alone pandoc Lua scripts, taking
+the list of arguments from the global `arg`.
+
+Parameters:
+
+`args`
+:   list of command line arguments ({string,\...})
+
+Returns:
+
+-   parsed options, using their JSON-like representation. (table)
+
+*Since: 3.0*
+
+### repl {#pandoc.cli.repl}
+
+`repl ([env])`
+
+Starts a read-eval-print loop (REPL). The function returns all
+values of the last evaluated input. Exit the REPL by pressing
+`ctrl-d` or `ctrl-c`; press `F1` to get a list of all key
+bindings.
+
+The REPL is started in the global namespace, unless the `env`
+parameter is specified. In that case, the global namespace is
+merged into the given table and the result is used as `_ENV` value
+for the repl.
+
+Specifically, local variables *cannot* be accessed, unless they
+are explicitly passed via the `env` parameter; e.g.
+
+    function Pandoc (doc)
+      -- start repl, allow to access the `doc` parameter
+      -- in the repl
+      return pandoc.cli.repl{ doc = doc }
+    end
+
+**Note**: it seems that the function exits immediately on
+Windows, without prompting for user input.
+
+Parameters:
+
+`env`
+:   Extra environment; the global environment is merged into this
+    table. (table)
+
+Returns:
+
+The result(s) of the last evaluated input, or nothing if the last
+input resulted in an error.
+
+*Since: 3.1.2*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.utils -->
 
 # Module pandoc.utils
 
 This module exposes internal pandoc functions and utility
 functions.
 
-The module is loaded as part of the `pandoc` module and
-available as `pandoc.utils`. In versions up-to and including
-pandoc 2.6, this module had to be loaded explicitly. Example:
+## Functions {#pandoc.utils-functions}
 
-    pandoc.utils = require 'pandoc.utils'
+### blocks_to_inlines {#pandoc.utils.blocks_to_inlines}
 
-Use the above for backwards compatibility.
-
-### `blocks_to_inlines (blocks[, sep])` {#pandoc.utils.blocks_to_inlines}
+`blocks_to_inlines (blocks[, sep])`
 
 Squash a list of blocks into a list of inlines.
 
-Parameters:
-
-`blocks`
-:   List of [Block](#type-block) elements to be flattened.
-
-`sep`
-:   List of [Inline](#type-inline) elements inserted as
-    separator between two consecutive blocks; defaults to `{
-    pandoc.Space(), pandoc.Str'¶', pandoc.Space()}`.
-
-Returns:
-
--   [Inlines][]
-
-Usage:
+Usage
 
     local blocks = {
       pandoc.Para{ pandoc.Str 'Paragraph1' },
       pandoc.Para{ pandoc.Emph 'Paragraph2' }
     }
     local inlines = pandoc.utils.blocks_to_inlines(blocks)
-    -- inlines = {
-    --   pandoc.Str 'Paragraph1',
-    --   pandoc.Space(), pandoc.Str'¶', pandoc.Space(),
-    --   pandoc.Emph{ pandoc.Str 'Paragraph2' }
-    -- }
+    assert(
+      inlines == pandoc.Inlines {
+        pandoc.Str 'Paragraph1',
+        pandoc.Linebreak(),
+        pandoc.Emph{ pandoc.Str 'Paragraph2' }
+      }
+    )
 
-### `equals (element1, element2)` {#pandoc.utils.equals}
+Parameters:
+
+`blocks`
+:   List of [Block] elements to be flattened. ([Blocks])
+
+`sep`
+:   List of [Inline] elements inserted as separator between two
+    consecutive blocks; defaults to `{pandoc.LineBreak()}`.
+    ([Inlines])
+
+Returns:
+
+-    ([Inlines])
+
+*Since: 2.2.3*
+
+### citeproc {#pandoc.utils.citeproc}
+
+`citeproc (doc)`
+
+Process the citations in the file, replacing them with rendered
+citations and adding a bibliography. See the manual section on
+citation rendering for details.
+
+Usage:
+
+    -- Lua filter that behaves like `--citeproc`
+    function Pandoc (doc)
+      return pandoc.utils.citeproc(doc)
+    end
+
+Parameters:
+
+`doc`
+:   document ([Pandoc])
+
+Returns:
+
+-   processed document ([Pandoc])
+
+*Since: 2.19.1*
+
+### equals {#pandoc.utils.equals}
+
+`equals (element1, element2)`
 
 Test equality of AST elements. Elements in Lua are considered
 equal if and only if the objects obtained by unmarshaling are
@@ -3524,22 +3806,25 @@ operator instead.
 
 Parameters:
 
-`element1`, `element2`
-:   Objects to be compared (any type)
+`element1`
+:    (any)
+
+`element2`
+:    (any)
 
 Returns:
 
 -   Whether the two objects represent the same element (boolean)
 
-### `from_simple_table (table)` {#pandoc.utils.from_simple_table}
+*Since: 2.5*
+
+### from_simple_table {#pandoc.utils.from_simple_table}
+
+`from_simple_table (simple_tbl)`
 
 Creates a [Table] block element from a [SimpleTable]. This is
 useful for dealing with legacy code which was written for pandoc
 versions older than 2.10.
-
-Returns:
-
--   table block element ([Table])
 
 Usage:
 
@@ -3549,17 +3834,28 @@ Usage:
     -- create normal table block again
     table = pandoc.utils.from_simple_table(simple)
 
-### `make_sections (number_sections, base_level, blocks)` {#pandoc.utils.make_sections}
+Parameters:
 
-Converts list of [Block](#type-block) elements into sections.
-`Div`s will be created beginning at each `Header`
-and containing following content until the next `Header`
-of comparable level.  If `number_sections` is true,
-a `number` attribute will be added to each `Header`
-containing the section number. If `base_level` is
-non-null, `Header` levels will be reorganized so
-that there are no gaps, and so that the base level
-is the level specified.
+`simple_tbl`
+:    ([SimpleTable])
+
+Returns:
+
+-   table block element ([Block])
+
+*Since: 2.11*
+
+### make_sections {#pandoc.utils.make_sections}
+
+`make_sections (number_sections, baselevel, blocks)`
+
+Converts a list of [Block] elements into sections. `Div`s will be
+created beginning at each `Header` and containing following
+content until the next `Header` of comparable level. If
+`number_sections` is true, a `number` attribute will be added to
+each `Header` containing the section number. If `base_level` is
+non-null, `Header` levels will be reorganized so that there are no
+gaps, and so that the base level is the level specified.
 
 Parameters:
 
@@ -3567,25 +3863,20 @@ Parameters:
 :   whether section divs should get an additional `number`
     attribute containing the section number. (boolean)
 
-`base_level`
-:   shift top-level headings to this level. (integer|nil)
+`baselevel`
+:   shift top-level headings to this level
+    ([integer]{unknown-type="integer"}\|nil)
 
 `blocks`
-:   list of blocks to process ([Blocks][])
+:   list of blocks to process ([Blocks])
 
 Returns:
 
--   [Blocks][].
+-   blocks with sections ([Blocks])
 
-Usage:
+*Since: 2.8*
 
-    local blocks = {
-      pandoc.Header(2, pandoc.Str 'first'),
-      pandoc.Header(2, pandoc.Str 'second'),
-    }
-    local newblocks = pandoc.utils.make_sections(true, 1, blocks)
-
-### references {#pandoc.references}
+### references {#pandoc.utils.references}
 
 `references (doc)`
 
@@ -3599,15 +3890,6 @@ used in CSL JSON; the return value can be use as `references`
 metadata, which is one of the values used by pandoc and citeproc
 when generating bibliographies.
 
-Parameters:
-
-`doc`
-:   document ([Pandoc](#type-pandoc))
-
-Returns:
-
--   list of references. (table)
-
 Usage:
 
     -- Include all cited references in document
@@ -3617,92 +3899,103 @@ Usage:
       return doc
     end
 
-### run\_json\_filter {#pandoc.utils.run_json_filter}
+Parameters:
+
+`doc`
+:   document ([Pandoc])
+
+Returns:
+
+-   lift of references. (table)
+
+*Since: 2.17*
+
+### run_json_filter {#pandoc.utils.run_json_filter}
 
 `run_json_filter (doc, filter[, args])`
 
-Filter the given doc by passing it through the a JSON filter.
+Filter the given doc by passing it through a JSON filter.
 
 Parameters:
 
 `doc`
-:   the Pandoc document to filter
+:   the Pandoc document to filter ([Pandoc])
 
 `filter`
-:   filter to run
+:   filter to run (string)
 
 `args`
 :   list of arguments passed to the filter. Defaults to
-    `{FORMAT}`.
+    `{FORMAT}`. ({string,\...})
 
 Returns:
 
--   ([Pandoc](#type-pandoc)) Filtered document
+-   filtered document ([Pandoc])
 
-Usage:
+*Since: 2.1.1*
 
-    -- Assumes `some_blocks` contains blocks for which a
-    -- separate literature section is required.
-    local sub_doc = pandoc.Pandoc(some_blocks, metadata)
-    sub_doc_with_bib = pandoc.utils.run_json_filter(
-      sub_doc,
-      'pandoc-citeproc'
-    )
-    some_blocks = sub_doc.blocks -- some blocks with bib
+### normalize_date {#pandoc.utils.normalize_date}
 
-### normalize\_date {#pandoc.utils.normalize_date}
+`normalize_date (date)`
 
-`normalize_date (date_string)`
+Parse a date and convert (if possible) to "YYYY-MM-DD" format. We
+limit years to the range 1601-9999 (ISO 8601 accepts greater than
+or equal to 1583, but MS Word only accepts dates starting 1601).
+Returns nil instead of a string if the conversion failed.
 
-Parse a date and convert (if possible) to "YYYY-MM-DD" format.
-We limit years to the range 1601-9999 (ISO 8601 accepts greater
-than or equal to 1583, but MS Word only accepts dates starting
-1601).
+Parameters:
+
+`date`
+:   the date string (string)
 
 Returns:
 
--   A date string, or nil when the conversion failed.
+-   normalized date, or nil if normalization failed. ([string or
+    nil]{unknown-type="string or nil"})
+
+*Since: 2.0.6*
 
 ### sha1 {#pandoc.utils.sha1}
 
-`sha1 (contents)`
+`sha1 (input)`
 
-Returns the SHA1 has of the contents.
+Computes the SHA1 hash of the given string input.
+
+Parameters:
+
+`input`
+:    (string)
 
 Returns:
 
--   SHA1 hash of the contents.
+-   hexadecimal hash value (string)
 
-Usage:
-
-    local fp = pandoc.utils.sha1("foobar")
+*Since: 2.0.6*
 
 ### stringify {#pandoc.utils.stringify}
 
 `stringify (element)`
 
-Converts the given element (Pandoc, Meta, Block, or Inline) into
-a string with all formatting removed.
+Converts the given element (Pandoc, Meta, Block, or Inline) into a
+string with all formatting removed.
+
+Parameters:
+
+`element`
+:   some pandoc AST element ([AST
+    element]{unknown-type="AST element"})
 
 Returns:
 
--   A plain string representation of the given element.
+-   A plain string representation of the given element. (string)
 
-Usage:
+*Since: 2.0.6*
 
-    local inline = pandoc.Emph{pandoc.Str 'Moin'}
-    -- outputs "Moin"
-    print(pandoc.utils.stringify(inline))
+### to_roman_numeral {#pandoc.utils.to_roman_numeral}
 
-### to\_roman\_numeral {#pandoc.utils.to_roman_numeral}
-
-`to_roman_numeral (integer)`
+`to_roman_numeral (n)`
 
 Converts an integer \< 4000 to uppercase roman numeral.
-
-Returns:
-
--   A roman numeral string.
 
 Usage:
 
@@ -3710,15 +4003,23 @@ Usage:
     local pandoc_birth_year = to_roman_numeral(2006)
     -- pandoc_birth_year == 'MMVI'
 
-### to\_simple\_table {#pandoc.utils.to_simple_table}
+Parameters:
 
-`to_simple_table (table)`
-
-Creates a [SimpleTable] out of a [Table] block.
+`n`
+:   positive integer below 4000
+    ([integer]{unknown-type="integer"})
 
 Returns:
 
--   a simple table object ([SimpleTable])
+-   A roman numeral. (string)
+
+*Since: 2.0.6*
+
+### to_simple_table {#pandoc.utils.to_simple_table}
+
+`to_simple_table (tbl)`
+
+Converts a table into an old/simple table.
 
 Usage:
 
@@ -3728,50 +4029,80 @@ Usage:
     -- create normal table block again
     table = pandoc.utils.from_simple_table(simple)
 
+Parameters:
+
+`tbl`
+:   a table ([Block])
+
+Returns:
+
+-   SimpleTable object ([SimpleTable])
+
+*Since: 2.11*
+
 ### type {#pandoc.utils.type}
 
 `type (value)`
 
 Pandoc-friendly version of Lua's default `type` function,
-returning the type of a value. This function works with all types
-listed in section [Lua type reference][], except if noted
-otherwise.
+returning type information similar to what is presented in the
+manual.
 
 The function works by checking the metafield `__name`. If the
 argument has a string-valued metafield `__name`, then it returns
 that string. Otherwise it behaves just like the normal `type`
 function.
 
+Usage: -- Prints one of 'string', 'boolean', 'Inlines', 'Blocks',
+-- 'table', and 'nil', corresponding to the Haskell constructors
+-- MetaString, MetaBool, MetaInlines, MetaBlocks, MetaMap, -- and
+an unset value, respectively. function Meta (meta) print('type of
+metavalue `author`:', pandoc.utils.type(meta.author)) end
+
 Parameters:
 
 `value`
-:   any Lua value
+:   any Lua value (any)
 
 Returns:
 
 -   type of the given value (string)
 
-Usage:
+*Since: 2.17*
 
-    -- Prints one of 'string', 'boolean', 'Inlines', 'Blocks',
-    -- 'table', and 'nil', corresponding to the Haskell constructors
-    -- MetaString, MetaBool, MetaInlines, MetaBlocks, MetaMap,
-    -- and an unset value, respectively.
-    function Meta (meta)
-      print('type of metavalue `author`:', pandoc.utils.type(meta.author))
-    end
+### Version {#pandoc.utils.Version}
+
+`Version (v)`
+
+Creates a Version object.
+
+Parameters:
+
+`v`
+:   version description ([version string, list of integers, or
+    integer]{unknown-type="version string, list of integers, or integer"})
+
+Returns:
+
+-   new Version object ([Version]{unknown-type="Version"})
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.mediabag -->
 
 # Module pandoc.mediabag
 
 The `pandoc.mediabag` module allows accessing pandoc's media
 storage. The "media bag" is used when pandoc is called with the
-`--extract-media` or (for HTML only) `--self-contained` option.
+`--extract-media` or (for HTML only) `--embed-resources` option.
 
-The module is loaded as part of module `pandoc` and can either
-be accessed via the `pandoc.mediabag` field, or explicitly
-required, e.g.:
+The module is loaded as part of module `pandoc` and can either be
+accessed via the `pandoc.mediabag` field, or explicitly required,
+e.g.:
 
     local mb = require 'pandoc.mediabag'
+
+## Functions {#pandoc.mediabag-functions}
 
 ### delete {#pandoc.mediabag.delete}
 
@@ -3782,8 +4113,10 @@ Removes a single entry from the media bag.
 Parameters:
 
 `filepath`
-:   filename of the item to be deleted. The media bag will be
-    left unchanged if no entry with the given filename exists.
+:   Filename of the item to deleted. The media bag will be left
+    unchanged if no entry with the given filename exists. (string)
+
+*Since: 2.7.3*
 
 ### empty {#pandoc.mediabag.empty}
 
@@ -3791,100 +4124,7 @@ Parameters:
 
 Clear-out the media bag, deleting all items.
 
-### insert {#pandoc.mediabag.insert}
-
-`insert (filepath, mime_type, contents)`
-
-Adds a new entry to pandoc's media bag. Replaces any existing
-mediabag entry with the same `filepath`.
-
-Parameters:
-
-`filepath`
-:   filename and path relative to the output folder.
-
-`mime_type`
-:   the file's MIME type; use `nil` if unknown or unavailable.
-
-`contents`
-:   the binary contents of the file.
-
-Usage:
-
-    local fp = "media/hello.txt"
-    local mt = "text/plain"
-    local contents = "Hello, World!"
-    pandoc.mediabag.insert(fp, mt, contents)
-
-### items {#pandoc.mediabag.items}
-
-`items ()`
-
-Returns an iterator triple to be used with Lua's generic `for`
-statement. The iterator returns the filepath, MIME type, and
-content of a media bag item on each invocation. Items are
-processed one-by-one to avoid excessive memory use.
-
-This function should be used only when full access to all items,
-including their contents, is required. For all other cases,
-[`list`](#pandoc.mediabag.list) should be preferred.
-
-Returns:
-
--   The iterator function; must be called with the iterator
-    state and the current iterator value.
--   Iterator state -- an opaque value to be passed to the
-    iterator function.
--   Initial iterator value.
-
-Usage:
-
-    for fp, mt, contents in pandoc.mediabag.items() do
-      -- print(fp, mt, contents)
-    end
-
-### list {#pandoc.mediabag.list}
-
-`list ()`
-
-Get a summary of the current media bag contents.
-
-Returns: A list of elements summarizing each entry in the media
-bag. The summary item contains the keys `path`, `type`, and
-`length`, giving the filepath, MIME type, and length of contents
-in bytes, respectively.
-
-Usage:
-
-    -- calculate the size of the media bag.
-    local mb_items = pandoc.mediabag.list()
-    local sum = 0
-    for i = 1, #mb_items do
-        sum = sum + mb_items[i].length
-    end
-    print(sum)
-
-### lookup {#pandoc.mediabag.lookup}
-
-`lookup (filepath)`
-
-Lookup a media item in the media bag, and return its MIME type
-and contents.
-
-Parameters:
-
-`filepath`
-:   name of the file to look up.
-
-Returns:
-
--   the entry's MIME type, or nil if the file was not found.
--   contents of the file, or nil if the file was not found.
-
-Usage:
-
-    local filename = "media/diagram.png"
-    local mt, contents = pandoc.mediabag.lookup(filename)
+*Since: 2.7.3*
 
 ### fetch {#pandoc.mediabag.fetch}
 
@@ -3899,20 +4139,177 @@ mediabag; if that fails, it will try to download it or read it
 from the local file system while respecting pandoc's "resource
 path" setting.
 
+Usage:
+
+    local diagram_url = 'https://pandoc.org/diagram.jpg'
+    local mt, contents = pandoc.mediabag.fetch(diagram_url)
+
 Parameters:
 
 `source`
-:   path to a resource; either a local file path or URI
+:   path to a resource; either a local file path or URI (string)
 
 Returns:
 
--   the entries MIME type, or nil if the file was not found.
--   contents of the file, or nil if the file was not found.
+-   The entry's MIME type, or `nil` if the file was not found.
+    (string)
+-   Contents of the file, or `nil` if the file was not found.
+    (string)
+
+*Since: 2.0*
+
+### fill {#pandoc.mediabag.fill}
+
+`fill (doc)`
+
+Fills the mediabag with the images in the given document. An image
+that cannot be retrieved will be replaced with a Span of class
+"image" that contains the image description.
+
+Images for which the mediabag already contains an item will not be
+processed again.
+
+Parameters:
+
+`doc`
+:   document from which to fill the mediabag ([Pandoc])
+
+Returns:
+
+-   modified document ([Pandoc])
+
+*Since: 2.19*
+
+### insert {#pandoc.mediabag.insert}
+
+`insert (filepath, mimetype, contents)`
+
+Adds a new entry to pandoc's media bag. Replaces any existing
+media bag entry the same `filepath`.
 
 Usage:
 
-    local diagram_url = "https://pandoc.org/diagram.jpg"
-    local mt, contents = pandoc.mediabag.fetch(diagram_url)
+    local fp = 'media/hello.txt'
+    local mt = 'text/plain'
+    local contents = 'Hello, World!'
+    pandoc.mediabag.insert(fp, mt, contents)
+
+Parameters:
+
+`filepath`
+:   filename and path relative to the output folder. (string)
+
+`mimetype`
+:   the item's MIME type; omit if unknown or unavailable. (string)
+
+`contents`
+:   the binary contents of the file. (string)
+
+*Since: 2.0*
+
+### items {#pandoc.mediabag.items}
+
+`items ()`
+
+Returns an iterator triple to be used with Lua's generic `for`
+statement. The iterator returns the filepath, MIME type, and
+content of a media bag item on each invocation. Items are
+processed one-by-one to avoid excessive memory use.
+
+This function should be used only when full access to all items,
+including their contents, is required. For all other cases,
+[`list`] should be preferred.
+
+Usage:
+
+    for fp, mt, contents in pandoc.mediabag.items() do
+      -- print(fp, mt, contents)
+    end
+
+Returns:
+
+Iterator triple:
+
+-   The iterator function; must be called with the iterator state
+    and the current iterator value.
+-   Iterator state -- an opaque value to be passed to the iterator
+    function.
+-   Initial iterator value.
+
+*Since: 2.7.3*
+
+### list {#pandoc.mediabag.list}
+
+`list ()`
+
+Get a summary of the current media bag contents.
+
+Usage:
+
+    -- calculate the size of the media bag.
+    local mb_items = pandoc.mediabag.list()
+    local sum = 0
+    for i = 1, #mb_items do
+        sum = sum + mb_items[i].length
+    end
+    print(sum)
+
+Returns:
+
+-   A list of elements summarizing each entry in the media bag.
+    The summary item contains the keys `path`, `type`, and
+    `length`, giving the filepath, MIME type, and length of
+    contents in bytes, respectively. (table)
+
+*Since: 2.0*
+
+### lookup {#pandoc.mediabag.lookup}
+
+`lookup (filepath)`
+
+Lookup a media item in the media bag, and return its MIME type and
+contents.
+
+Usage:
+
+    local filename = 'media/diagram.png'
+    local mt, contents = pandoc.mediabag.lookup(filename)
+
+Parameters:
+
+`filepath`
+:   name of the file to look up. (string)
+
+Returns:
+
+-   The entry's MIME type, or nil if the file was not found.
+    (string)
+-   Contents of the file, or nil if the file was not found.
+    (string)
+
+*Since: 2.0*
+
+### write {#pandoc.mediabag.write}
+
+`write (dir[, fp])`
+
+Writes the contents of mediabag to the given target directory. If
+`fp` is given, then only the resource with the given name will be
+extracted. Omitting that parameter means that the whole mediabag
+gets extracted. An error is thrown if `fp` is given but cannot be
+found in the mediabag.
+
+Parameters:
+
+`dir`
+:   path of the target directory (string)
+
+`fp`
+:   canonical name (relative path) of resource (string)
+
+*Since: 3.0*
+
+<!-- END: AUTOGENERATED CONTENT -->
 
 # Module pandoc.List
 
@@ -3961,7 +4358,8 @@ Returns:
 
 ### `pandoc.List:clone ()` {#pandoc.list:clone}
 
-Returns a (shallow) copy of the list.
+Returns a (shallow) copy of the list. (To get a deep copy
+of the list, use `walk` with an empty filter.)
 
 ### `pandoc.List:extend (list)` {#pandoc.list:extend}
 
@@ -4038,7 +4436,7 @@ Inserts element `value` at position `pos` in list, shifting
 elements to the next-greater index if necessary.
 
 This function is identical to
-[`table.insert`](https://www.lua.org/manual/5.3/manual.html#6.6).
+[`table.insert`](https://www.lua.org/manual/5.4/manual.html#6.6).
 
 Parameters:
 
@@ -4077,7 +4475,7 @@ Removes the element at position `pos`, returning the value
 of the removed element.
 
 This function is identical to
-[`table.remove`](https://www.lua.org/manual/5.3/manual.html#6.6).
+[`table.remove`](https://www.lua.org/manual/5.4/manual.html#6.6).
 
 Parameters:
 
@@ -4107,31 +4505,190 @@ by the given order may have their relative positions changed
 by the sort.
 
 This function is identical to
-[`table.sort`](https://www.lua.org/manual/5.3/manual.html#6.6).
+[`table.sort`](https://www.lua.org/manual/5.4/manual.html#6.6).
 
 Parameters:
 
 `comp`
 :   Comparison function as described above.
 
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.format -->
+
+# Module pandoc.format
+
+Information about the formats supported by pandoc.
+
+## Functions {#pandoc.format-functions}
+
+### all_extensions {#pandoc.format.all_extensions}
+
+`all_extensions (format)`
+
+Returns the list of all valid extensions for a format. No
+distinction is made between input and output; an extension can
+have an effect when reading a format but not when writing it, or
+*vice versa*.
+
+Parameters:
+
+`format`
+:   format name (string)
+
+Returns:
+
+-   all extensions supported for `format`
+    ([FormatExtensions]{unknown-type="FormatExtensions"})
+
+*Since: 3.0*
+
+### default_extensions {#pandoc.format.default_extensions}
+
+`default_extensions (format)`
+
+Returns the list of default extensions of the given format; this
+function does not check if the format is supported, it will return
+a fallback list of extensions even for unknown formats.
+
+Parameters:
+
+`format`
+:   format name (string)
+
+Returns:
+
+-   default extensions enabled for `format`
+    ([FormatExtensions]{unknown-type="FormatExtensions"})
+
+*Since: 3.0*
+
+### extensions {#pandoc.format.extensions}
+
+`extensions (format)`
+
+Returns the extension configuration for the given format. The
+configuration is represented as a table with all supported
+extensions as keys and their default status as value, with `true`
+indicating that the extension is enabled by default, while `false`
+marks a supported extension that's disabled.
+
+This function can be used to assign a value to the `Extensions`
+global in custom readers and writers.
+
+Parameters:
+
+`format`
+:   format identifier (string)
+
+Returns:
+
+-   extensions config (table)
+
+*Since: 3.0*
+
+### from_path {#pandoc.format.from_path}
+
+`from_path (path)`
+
+Parameters:
+
+`path`
+:   file path, or list of paths (string\|{string,\...})
+
+Returns:
+
+-   format determined by heuristic (string\|nil)
+
+*Since: 3.1.2*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.json -->
+
+# Module pandoc.json
+
+JSON module to work with JSON; based on the Aeson Haskell package.
+
+## Fields {#pandoc.json-fields}
+
+### null {#pandoc.json.null}
+
+Value used to represent the `null` JSON value. (light userdata)
+
+## Functions {#pandoc.json-functions}
+
+### decode {#pandoc.json.decode}
+
+`decode (str[, pandoc_types])`
+
+Creates a Lua object from a JSON string. The function returns an
+[Inline], [Block], [Pandoc], [Inlines], or [Blocks] element if the
+input can be decoded into represent any of those types. Otherwise
+the default decoding is applied, using tables, booleans, numbers,
+and [null] to represent the JSON value.
+
+The special handling of AST elements can be disabled by setting
+`pandoc_types` to `false`.
+
+Parameters:
+
+`str`
+:   JSON string (string)
+
+`pandoc_types`
+:   whether to use pandoc types when possible. (boolean)
+
+Returns:
+
+-   decoded object (any)
+
+*Since: 3.1.1*
+
+### encode {#pandoc.json.encode}
+
+`encode (object)`
+
+Encodes a Lua object as JSON string.
+
+If the object has a metamethod with name `__tojson`, then the
+result is that of a call to that method with `object` passed as
+the sole argument. The result of that call is expected to be a
+valid JSON string, but this not checked.
+
+Parameters:
+
+`object`
+:   object to convert (any)
+
+Returns:
+
+-   JSON encoding of the given `object` (string)
+
+*Since: 3.1.1*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.path -->
+
 # Module pandoc.path
 
 Module for file path manipulations.
 
-## Static Fields {#pandoc.path-fields}
+## Fields {#pandoc.path-fields}
 
 ### separator {#pandoc.path.separator}
 
-The character that separates directories.
+The character that separates directories. (string)
 
 ### search_path_separator {#pandoc.path.search_path_separator}
 
 The character that is used to separate the entries in the `PATH`
-environment variable.
+environment variable. (string)
 
 ## Functions {#pandoc.path-functions}
 
-### directory (filepath) {#pandoc.path.directory}
+### directory {#pandoc.path.directory}
+
+`directory (filepath)`
 
 Gets the directory name, i.e., removes the last directory
 separator and everything after from the given path.
@@ -4145,7 +4702,11 @@ Returns:
 
 -   The filepath up to the last directory separator. (string)
 
-### filename (filepath) {#pandoc.path.filename}
+*Since: 2.12*
+
+### filename {#pandoc.path.filename}
+
+`filename (filepath)`
 
 Get the file name.
 
@@ -4158,9 +4719,13 @@ Returns:
 
 -   File name part of the input path. (string)
 
-### is_absolute (filepath) {#pandoc.path.is_absolute}
+*Since: 2.12*
 
-Checks whether a path is absolute, i.e. not fixed to a root.
+### is_absolute {#pandoc.path.is_absolute}
+
+`is_absolute (filepath)`
+
+Checks whether a path is absolute, i.e. not fixed to a root.
 
 Parameters:
 
@@ -4169,10 +4734,14 @@ Parameters:
 
 Returns:
 
--   `true` if `filepath` is an absolute path, `false` otherwise.
+-   `true` iff `filepath` is an absolute path, `false` otherwise.
     (boolean)
 
-### is_relative (filepath) {#pandoc.path.is_relative}
+*Since: 2.12*
+
+### is_relative {#pandoc.path.is_relative}
+
+`is_relative (filepath)`
 
 Checks whether a path is relative or fixed to a root.
 
@@ -4183,31 +4752,36 @@ Parameters:
 
 Returns:
 
--   `true` if `filepath` is a relative path, `false` otherwise.
+-   `true` iff `filepath` is a relative path, `false` otherwise.
     (boolean)
 
-### join (filepaths) {#pandoc.path.join}
+*Since: 2.12*
+
+### join {#pandoc.path.join}
+
+`join (filepaths)`
 
 Join path elements back together by the directory separator.
 
 Parameters:
 
 `filepaths`
-:   path components (list of strings)
+:   path components ({string,\...})
 
 Returns:
 
 -   The joined path. (string)
 
-### make_relative (path, root[, unsafe]) {#pandoc.path.make_relative}
+*Since: 2.12*
+
+### make_relative {#pandoc.path.make_relative}
+
+`make_relative (path, root[, unsafe])`
 
 Contract a filename, based on a relative path. Note that the
-resulting path will usually not introduce `..` paths, as the
-presence of symlinks means `../b` may not reach `a/b` if it starts
-from `a/c`. For a worked example see [this blog
-post](https://neilmitchell.blogspot.co.uk/2015/10/filepaths-are-subtle-symlinks-are-hard.html).
-
-Set `unsafe` to a truthy value to a allow `..` in paths.
+resulting path will never introduce `..` paths, as the presence of
+symlinks means `../b` may not reach `a/b` if it starts from `a/c`.
+For a worked example see [this blog post].
 
 Parameters:
 
@@ -4224,15 +4798,19 @@ Returns:
 
 -   contracted filename (string)
 
-### normalize (filepath) {#pandoc.path.normalize}
+*Since: 2.12*
+
+### normalize {#pandoc.path.normalize}
+
+`normalize (filepath)`
 
 Normalizes a path.
 
 -   `//` makes sense only as part of a (Windows) network drive;
     elsewhere, multiple slashes are reduced to a single
     `path.separator` (platform dependent).
--   `/` becomes `path.separator` (platform dependent)
--   `./` -\> ''
+-   `/` becomes `path.separator` (platform dependent).
+-   `./` is removed.
 -   an empty path becomes `.`
 
 Parameters:
@@ -4244,7 +4822,11 @@ Returns:
 
 -   The normalized path. (string)
 
-### split (filepath) {#pandoc.path.split}
+*Since: 2.12*
+
+### split {#pandoc.path.split}
+
+`split (filepath)`
 
 Splits a path by the directory separator.
 
@@ -4255,13 +4837,18 @@ Parameters:
 
 Returns:
 
--   List of all path components. (list of strings)
+-   List of all path components. ({string,\...})
 
-### split_extension (filepath) {#pandoc.path.split_extension}
+*Since: 2.12*
 
-Splits the last extension from a file path and returns the parts. The
-extension, if present, includes the leading separator; if the path has
-no extension, then the empty string is returned as the extension.
+### split_extension {#pandoc.path.split_extension}
+
+`split_extension (filepath)`
+
+Splits the last extension from a file path and returns the parts.
+The extension, if present, includes the leading separator; if the
+path has no extension, then the empty string is returned as the
+extension.
 
 Parameters:
 
@@ -4271,14 +4858,17 @@ Parameters:
 Returns:
 
 -   filepath without extension (string)
-
 -   extension or empty string (string)
 
-### split_search_path (search_path) {#pandoc.path.split_search_path}
+*Since: 2.12*
 
-Takes a string and splits it on the `search_path_separator` character.
-Blank items are ignored on Windows, and converted to `.` on Posix. On
-Windows path elements are stripped of quotes.
+### split_search_path {#pandoc.path.split_search_path}
+
+`split_search_path (search_path)`
+
+Takes a string and splits it on the `search_path_separator`
+character. Blank items are ignored on Windows, and converted to
+`.` on Posix. On Windows path elements are stripped of quotes.
 
 Parameters:
 
@@ -4287,36 +4877,209 @@ Parameters:
 
 Returns:
 
--   list of directories in search path (list of strings)
+-   list of directories in search path ({string,\...})
+
+*Since: 2.12*
+
+### treat_strings_as_paths {#pandoc.path.treat_strings_as_paths}
+
+`treat_strings_as_paths ()`
+
+Augment the string module such that strings can be used as path
+objects.
+
+*Since: 2.12*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.structure -->
+
+# Module pandoc.structure
+
+Access to the higher-level document structure, including
+hierarchical sections and the table of contents.
+
+## Functions {#pandoc.structure-functions}
+
+### make_sections {#pandoc.structure.make_sections}
+
+`make_sections (blocks[, opts])`
+
+Puts [Blocks] into a hierarchical structure: a list of sections
+(each a Div with class "section" and first element a Header).
+
+The optional `opts` argument can be a table; two settings are
+recognized: If `number_sections` is true, a `number` attribute
+containing the section number will be added to each `Header`. If
+`base_level` is an integer, then `Header` levels will be
+reorganized so that there are no gaps, with numbering levels
+shifted by the given value. Finally, an integer `slide_level`
+value triggers the creation of slides at that heading level.
+
+Note that a [WriterOptions] object can be passed as the opts
+table; this will set the `number_section` and `slide_level` values
+to those defined on the command line.
+
+Usage:
+
+    local blocks = {
+      pandoc.Header(2, pandoc.Str 'first'),
+      pandoc.Header(2, pandoc.Str 'second'),
+    }
+    local opts = PANDOC_WRITER_OPTIONS
+    local newblocks = pandoc.structure.make_sections(blocks, opts)
+
+Parameters:
+
+`blocks`
+:   document blocks to process ([Blocks]\|[Pandoc])
+
+`opts`
+:   options (table)
+
+Returns:
+
+-   processed blocks ([Blocks])
+
+*Since: 3.0*
+
+### slide_level {#pandoc.structure.slide_level}
+
+`slide_level (blocks)`
+
+Find level of header that starts slides (defined as the least
+header level that occurs before a non-header/non-hrule in the
+blocks).
+
+Parameters:
+
+`blocks`
+:   document body ([Blocks]\|[Pandoc])
+
+Returns:
+
+-   slide level ([integer]{unknown-type="integer"})
+
+*Since: 3.0*
+
+### split_into_chunks {#pandoc.structure.split_into_chunks}
+
+`split_into_chunks (doc[, opts])`
+
+Converts a [Pandoc] document into a [ChunkedDoc].
+
+Parameters:
+
+`doc`
+:   document to split ([Pandoc])
+
+`opts`
+
+:   Splitting options.
+
+    The following options are supported:
+
+        `path_template`
+        :   template used to generate the chunks' filepaths
+            `%n` will be replaced with the chunk number (padded with
+            leading 0s to 3 digits), `%s` with the section number of
+            the heading, `%h` with the (stringified) heading text,
+            `%i` with the section identifier. For example,
+            `"section-%s-%i.html"` might be resolved to
+            `"section-1.2-introduction.html"`.
+
+            Default is `"chunk-%n"` (string)
+
+        `number_sections`
+        :   whether sections should be numbered; default is `false`
+            (boolean)
+
+        `chunk_level`
+        :   The heading level the document should be split into
+            chunks. The default is to split at the top-level, i.e.,
+            `1`. (integer)
+
+        `base_heading_level`
+        :   The base level to be used for numbering. Default is `nil`
+            (integer|nil)
+
+    (table)
+
+Returns:
+
+-    ([ChunkedDoc])
+
+*Since: 3.0*
+
+### table_of_contents {#pandoc.structure.table_of_contents}
+
+`table_of_contents (toc_source[, opts])`
+
+Generates a table of contents for the given object.
+
+Parameters:
+
+`toc_source`
+:   list of command line arguments
+    ([Blocks]\|[Pandoc]\|[ChunkedDoc])
+
+`opts`
+:   options ([WriterOptions])
+
+Returns:
+
+-   Table of contents as a BulletList object ([Block])
+
+*Since: 3.0*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.system -->
 
 # Module pandoc.system
 
-Access to system information and functionality.
+Access to the system's information and file functionality.
 
-## Static Fields
+## Fields {#pandoc.system-fields}
 
 ### arch {#pandoc.system.arch}
 
-The machine architecture on which the program is running.
+The machine architecture on which the program is running. (string)
 
 ### os {#pandoc.system.os}
 
-The operating system on which the program is running.
+The operating system on which the program is running. (string)
 
-## Functions
+## Functions {#pandoc.system-functions}
+
+### cputime {#pandoc.system.cputime}
+
+`cputime ()`
+
+Returns the number of picoseconds CPU time used by the current
+program. The precision of this result may vary in different
+versions and on different platforms.
+
+Returns:
+
+-   CPU time in picoseconds ([integer]{unknown-type="integer"})
+
+*Since: 3.1.1*
 
 ### environment {#pandoc.system.environment}
 
 `environment ()`
 
-Retrieve the entire environment as a string-indexed table.
+Retrieves the entire environment as a string-indexed table.
 
 Returns:
 
--   A table mapping environment variables names to their string
-    value (table).
+-   A table mapping environment variable names to their value.
+    (table)
 
-### get\_working\_directory {#pandoc.system.get_working_directory}
+*Since: 2.7.3*
+
+### get_working_directory {#pandoc.system.get_working_directory}
 
 `get_working_directory ()`
 
@@ -4324,9 +5087,71 @@ Obtain the current working directory as an absolute path.
 
 Returns:
 
--   The current working directory (string).
+-   The current working directory. (string)
 
-### with\_environment {#pandoc.system.with_environment}
+*Since: 2.8*
+
+### list_directory {#pandoc.system.list_directory}
+
+`list_directory ([directory])`
+
+List the contents of a directory.
+
+Parameters:
+
+`directory`
+:   Path of the directory whose contents should be listed.
+    Defaults to `.`. (string)
+
+Returns:
+
+-   A table of all entries in `directory`, except for the special
+    entries (`.` and `..`). (table)
+
+*Since: 2.19*
+
+### make_directory {#pandoc.system.make_directory}
+
+`make_directory (dirname[, create_parent])`
+
+Create a new directory which is initially empty, or as near to
+empty as the operating system allows. The function throws an error
+if the directory cannot be created, e.g., if the parent directory
+does not exist or if a directory of the same name is already
+present.
+
+If the optional second parameter is provided and truthy, then all
+directories, including parent directories, are created as
+necessary.
+
+Parameters:
+
+`dirname`
+:   name of the new directory (string)
+
+`create_parent`
+:   create parent directory if necessary (boolean)
+
+*Since: 2.19*
+
+### remove_directory {#pandoc.system.remove_directory}
+
+`remove_directory (dirname[, recursive])`
+
+Remove an existing, empty directory. If `recursive` is given, then
+delete the directory and its contents recursively.
+
+Parameters:
+
+`dirname`
+:   name of the directory to delete (string)
+
+`recursive`
+:   delete content recursively (boolean)
+
+*Since: 2.19*
+
+### with_environment {#pandoc.system.with_environment}
 
 `with_environment (environment, callback)`
 
@@ -4340,19 +5165,20 @@ Parameters:
 
 `environment`
 :   Environment variables and their values to be set before
-    running `callback`. (table with string keys and string
-    values)
+    running `callback` (table)
 
 `callback`
 :   Action to execute in the custom environment (function)
 
 Returns:
 
--   The result(s) of the call to `callback`
+The results of the call to `callback`.
 
-### with\_temporary\_directory {#pandoc.system.with_temporary_directory}
+*Since: 2.7.3*
 
-`with_temporary_directory ([parent_dir,] templ, callback)`
+### with_temporary_directory {#pandoc.system.with_temporary_directory}
+
+`with_temporary_directory (parent_dir, templ, callback)`
 
 Create and use a temporary directory inside the given directory.
 The directory is deleted after the callback returns.
@@ -4360,22 +5186,24 @@ The directory is deleted after the callback returns.
 Parameters:
 
 `parent_dir`
-:   Parent directory to create the directory in (string). If
-    this parameter is omitted, the system's canonical temporary
-    directory is used.
+:   Parent directory to create the directory in. If this parameter
+    is omitted, the system's canonical temporary directory is
+    used. (string)
 
 `templ`
-:   Directory name template (string).
+:   Directory name template. (string)
 
 `callback`
 :   Function which takes the name of the temporary directory as
-    its first argument (function).
+    its first argument. (function)
 
 Returns:
 
--   The result of the call to `callback`.
+The results of the call to `callback`.
 
-### with\_working\_directory {#pandoc.system.with_working_directory}
+*Since: 2.8*
+
+### with_working_directory {#pandoc.system.with_working_directory}
 
 `with_working_directory (directory, callback)`
 
@@ -4395,7 +5223,11 @@ Parameters:
 
 Returns:
 
--   The result(s) of the call to `callback`
+The results of the call to `callback`.
+
+*Since: 2.7.3*
+
+<!-- END: AUTOGENERATED CONTENT -->
 
 # Module pandoc.layout
 
@@ -4681,7 +5513,7 @@ Parameters
 
 Returns
 
--   doc contatining just the literal string ([Doc])
+-   doc containing just the literal string ([Doc])
 
 ### nest {#pandoc.layout.nest}
 
@@ -4831,8 +5663,8 @@ Returns
 
 `render (doc[, colwidth])`
 
-Render a @\'Doc\'@. The text is reflowed on breakable spacesto
-match the given line length. Text is not reflowed if theline
+Render a @\'Doc\'@. The text is reflowed on breakable spaces to
+match the given line length. Text is not reflowed if the line
 length parameter is omitted or nil.
 
 Parameters
@@ -4920,7 +5752,7 @@ Returns
 `real_length (str)`
 
 Returns the real length of a string in a monospace font: 0 for a
-combining chaeracter, 1 for a regular character, 2 for an East
+combining character, 1 for a regular character, 2 for an East
 Asian wide character.
 
 Parameters
@@ -4956,9 +5788,215 @@ Returns
 
 [Doc]: #type-doc
 
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.scaffolding -->
+
+# Module pandoc.scaffolding
+
+Scaffolding for custom writers.
+
+## Fields {#pandoc.scaffolding-fields}
+
+### Writer {#pandoc.scaffolding.Writer}
+
+An object to be used as a `Writer` function; the construct handles
+most of the boilerplate, expecting only render functions for all
+AST elements (table)
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.text -->
+
+# Module pandoc.text
+
+UTF-8 aware text manipulation functions, implemented in Haskell.
+
+The text module can also be loaded under the name `text`, although
+this is discouraged and deprecated.
+
+``` lua
+-- uppercase all regular text in a document:
+function Str (s)
+  s.text = pandoc.text.upper(s.text)
+  return s
+end
+```
+
+## Functions {#pandoc.text-functions}
+
+### fromencoding {#pandoc.text.fromencoding}
+
+`fromencoding (s[, encoding])`
+
+Converts a string to UTF-8. The `encoding` parameter specifies the
+encoding of the input string. On Windows, that parameter defaults
+to the current ANSI code page; on other platforms the function
+will try to use the file system's encoding.
+
+The set of known encodings is system dependent, but includes at
+least `UTF-8`, `UTF-16BE`, `UTF-16LE`, `UTF-32BE`, and `UTF-32LE`.
+Note that the default code page on Windows is available through
+`CP0`.
+
+Parameters:
+
+`s`
+:   string to be converted (string)
+
+`encoding`
+:   target encoding (string)
+
+Returns:
+
+-   UTF-8 string (string)
+
+*Since: 3.0*
+
+### len {#pandoc.text.len}
+
+`len (s)`
+
+Returns the length of a UTF-8 string, i.e., the number of
+characters.
+
+Parameters:
+
+`s`
+:   UTF-8 encoded string (string)
+
+Returns:
+
+-   length ([integer]{unknown-type="integer"}\|string)
+
+*Since: 2.0.3*
+
+### lower {#pandoc.text.lower}
+
+`lower (s)`
+
+Returns a copy of a UTF-8 string, converted to lowercase.
+
+Parameters:
+
+`s`
+:   UTF-8 string to convert to lowercase (string)
+
+Returns:
+
+-   Lowercase copy of `s` (string)
+
+*Since: 2.0.3*
+
+### reverse {#pandoc.text.reverse}
+
+`reverse (s)`
+
+Returns a copy of a UTF-8 string, with characters reversed.
+
+Parameters:
+
+`s`
+:   UTF-8 string to revert (string)
+
+Returns:
+
+-   Reversed `s` (string)
+
+*Since: 2.0.3*
+
+### sub {#pandoc.text.sub}
+
+`sub (s, i[, j])`
+
+Returns a substring of a UTF-8 string, using Lua's string indexing
+rules.
+
+Parameters:
+
+`s`
+:   UTF-8 string (string)
+
+`i`
+:   substring start position ([integer]{unknown-type="integer"})
+
+`j`
+:   substring end position ([integer]{unknown-type="integer"})
+
+Returns:
+
+-   text substring (string)
+
+*Since: 2.0.3*
+
+### toencoding {#pandoc.text.toencoding}
+
+`toencoding (s[, enc])`
+
+Converts a UTF-8 string to a different encoding. The `encoding`
+parameter defaults to the current ANSI code page on Windows; on
+other platforms it will try to guess the file system's encoding.
+
+The set of known encodings is system dependent, but includes at
+least `UTF-8`, `UTF-16BE`, `UTF-16LE`, `UTF-32BE`, and `UTF-32LE`.
+Note that the default code page on Windows is available through
+`CP0`.
+
+Parameters:
+
+`s`
+:   UTF-8 string (string)
+
+`enc`
+:   target encoding (string)
+
+Returns:
+
+-   re-encoded string (string)
+
+*Since: 3.0*
+
+### upper {#pandoc.text.upper}
+
+`upper (s)`
+
+Returns a copy of a UTF-8 string, converted to uppercase.
+
+Parameters:
+
+`s`
+:   UTF-8 string to convert to uppercase (string)
+
+Returns:
+
+-   Uppercase copy of `s` (string)
+
+*Since: 2.0.3*
+
+<!-- END: AUTOGENERATED CONTENT -->
+
 # Module pandoc.template
 
 Handle pandoc templates.
+
+### apply {#pandoc.template.apply}
+
+`apply (template, context)`
+
+Applies a context with variable assignments to a template,
+returning the rendered template. The `context` parameter must be a
+table with variable names as keys and [Doc], string, boolean, or
+table as values, where the table can be either be a list of the
+aforementioned types, or a nested context.
+
+Parameters:
+
+`template`
+:   template to apply ([Template]{#type-template})
+
+`context`
+:   variable values (table)
+
+Returns:
+
+-   rendered template ([Doc])
 
 ### compile {#pandoc.template.compile}
 
@@ -5005,6 +6043,29 @@ Returns:
 
 -   raw template (string)
 
+### meta_to_context {#pandoc.template.meta_to_context}
+
+`meta_to_context (meta, blocks_writer, inlines_writer)`
+
+Creates template context from the document's [Meta]{#type-meta}
+data, using the given functions to convert [Blocks] and [Inlines]
+to [Doc] values.
+
+Parameters:
+
+`meta`
+:   document metadata ([Meta])
+
+`blocks_writer`
+:   converter from [Blocks] to [Doc] values (function)
+
+`inlines_writer`
+:   converter from [Inlines] to [Doc] values (function)
+
+Returns:
+
+-   template context (table)
+
 # Module pandoc.types
 
 Constructors for types which are not part of the pandoc AST.
@@ -5025,3 +6086,210 @@ Parameters:
 Returns:
 
 -   A new [Version] object.
+
+<!-- BEGIN: AUTOGENERATED CONTENT for module pandoc.zip -->
+
+# Module pandoc.zip
+
+Functions to create, modify, and extract files from zip archives.
+
+The module can be called as a function, in which case it behaves
+like the `zip` function described below.
+
+Zip options are optional; when defined, they must be a table with
+any of the following keys:
+
+-   `recursive`: recurse directories when set to `true`;
+-   `verbose`: print info messages to stdout;
+-   `destination`: the value specifies the directory in which to
+    extract;
+-   `location`: value is used as path name, defining where files
+    are placed.
+-   `preserve_symlinks`: Boolean value, controlling whether
+    symbolic links are preserved as such. This option is ignored
+    on Windows.
+
+## Functions {#pandoc.zip-functions}
+
+### Archive {#pandoc.zip.Archive}
+
+`Archive ([bytestring_or_entries])`
+
+Reads an *Archive* structure from a raw zip archive or a list of
+Entry items; throws an error if the given string cannot be decoded
+into an archive.
+
+Parameters:
+
+`bytestring_or_entries`
+:   binary archive data or list of entries; defaults to an empty
+    list (string\|{[zip.Entry],\...})
+
+Returns:
+
+-   new Archive ([zip.Archive])
+
+*Since: 3.0*
+
+### Entry {#pandoc.zip.Entry}
+
+`Entry (path, contents[, modtime])`
+
+Generates a ZipEntry from a filepath, uncompressed content, and
+the file's modification time.
+
+Parameters:
+
+`path`
+:   file path in archive (string)
+
+`contents`
+:   uncompressed contents (string)
+
+`modtime`
+:   modification time ([integer]{unknown-type="integer"})
+
+Returns:
+
+-   a new zip archive entry ([zip.Entry])
+
+*Since: 3.0*
+
+### read_entry {#pandoc.zip.read_entry}
+
+`read_entry (filepath[, opts])`
+
+Generates a ZipEntry from a file or directory.
+
+Parameters:
+
+`filepath`
+:    (string)
+
+`opts`
+:   zip options (table)
+
+Returns:
+
+-   a new zip archive entry ([zip.Entry])
+
+*Since: 3.0*
+
+### zip {#pandoc.zip.zip}
+
+`zip (filepaths[, opts])`
+
+Package and compress the given files into a new Archive.
+
+Parameters:
+
+`filepaths`
+:   list of files from which the archive is created.
+    ({string,\...})
+
+`opts`
+:   zip options (table)
+
+Returns:
+
+-   a new archive ([zip.Archive])
+
+*Since: 3.0*
+
+## Types {#pandoc.zip-types}
+
+### zip.Archive {#type-pandoc.zip.Archive}
+
+#### Properties {#type-pandoc.zip.Archive-properties}
+
+##### entries {#type-pandoc.zip.Archive.entries}
+
+Files in this zip archive ({[zip.Entry],\...})
+
+#### Methods
+
+##### bytestring {#pandoc.zip.Archive.bytestring}
+
+`bytestring (self)`
+
+Returns the raw binary string representation of the archive.
+
+Parameters:
+
+`self`
+:    ([zip.Archive])
+
+Returns:
+
+-   bytes of the archive (string)
+
+##### extract {#pandoc.zip.Archive.extract}
+
+`extract (self[, opts])`
+
+Extract all files from this archive, creating directories as
+needed. Note that the last-modified time is set correctly only in
+POSIX, not in Windows. This function fails if encrypted entries
+are present.
+
+Parameters:
+
+`self`
+:    ([zip.Archive])
+
+`opts`
+:   zip options (table)
+
+### zip.Entry {#type-pandoc.zip.Entry}
+
+#### Properties {#type-pandoc.zip.Entry-properties}
+
+##### modtime {#type-pandoc.zip.Entry.modtime}
+
+Modification time (seconds since unix epoch)
+([integer]{unknown-type="integer"})
+
+##### path {#type-pandoc.zip.Entry.path}
+
+Relative path, using `/` as separator ([zip.Entry])
+
+#### Methods
+
+##### contents {#pandoc.zip.Entry.contents}
+
+`contents (self[, password])`
+
+Get the uncompressed contents of a zip entry. If `password` is
+given, then that password is used to decrypt the contents. An
+error is throws if decrypting fails.
+
+Parameters:
+
+`self`
+:    ([zip.Entry])
+
+`password`
+:   password for entry (string)
+
+Returns:
+
+-   binary contents (string)
+
+<!-- END: AUTOGENERATED CONTENT -->
+
+<!-- BEGIN: GENERATED REFERENCE LINKS -->
+
+  [Block]: #type-block
+  [Blocks]: #type-blocks
+  [Inline]: #type-inline
+  [Inlines]: #type-inlines
+  [Pandoc]: #type-pandoc
+  [Table]: #type-table
+  [SimpleTable]: #type-simpletable
+  [`list`]: #pandoc.mediabag.list
+  [null]: #pandoc.json.null
+  [this blog post]: http://neilmitchell.blogspot.co.uk/2015/10/filepaths-are-subtle-symlinks-are-hard.html
+  [WriterOptions]: #type-writeroptions
+  [ChunkedDoc]: #type-chunkeddoc
+  [zip.Entry]: #type-pandoc.zip.Entry
+  [zip.Archive]: #type-pandoc.zip.Archive

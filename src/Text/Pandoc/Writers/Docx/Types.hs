@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
 Module      : Text.Pandoc.Writers.Docx
-Copyright   : Copyright (C) 2012-2022 John MacFarlane
+Copyright   : Copyright (C) 2012-2023 John MacFarlane
 License     : GNU GPL, version 2 or above
 Maintainer  : John MacFarlane <jgm@berkeley.edu>
 
@@ -84,6 +84,7 @@ data WriterEnv = WriterEnv
   , envChangesAuthor  :: Text
   , envChangesDate    :: Text
   , envPrintWidth     :: Integer
+  , envLang           :: Maybe Text
   }
 
 defaultWriterEnv :: WriterEnv
@@ -97,6 +98,7 @@ defaultWriterEnv = WriterEnv
   , envChangesAuthor  = "unknown"
   , envChangesDate    = "1969-12-31T19:00:00Z"
   , envPrintWidth     = 1
+  , envLang           = Nothing
   }
 
 

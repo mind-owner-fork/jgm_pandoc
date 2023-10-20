@@ -4,7 +4,7 @@ Pandoc Test Suite
 
 :Author: John MacFarlane
 :Author: Anonymous
-:Date:   July 17, 2006
+:Date: July 17, 2006
 
 .. role:: raw-latex(raw)
    :format: latex
@@ -784,7 +784,7 @@ Images
 From “Voyage dans la Lune” by Georges Melies (1902):
 
 .. figure:: lalune.jpg
-   :alt: Voyage dans la Lune
+   :alt: lalune
 
    lalune
 

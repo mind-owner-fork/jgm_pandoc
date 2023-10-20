@@ -1,6 +1,6 @@
 {- |
    Module      : Text.Pandoc.Readers.Org.Parsing
-   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -29,6 +29,7 @@ module Text.Pandoc.Readers.Org.Parsing
   , orgArgWordChar
   , orgTagWord
   , orgTagWordChar
+  , orgAnchor
   -- * Re-exports from Text.Pandoc.Parser
   , ParserContext (..)
   , textStr
@@ -114,7 +115,7 @@ import Control.Monad (guard)
 import Control.Monad.Reader (ReaderT)
 
 -- | The parser used to read org files.
-type OrgParser m = ParserT Sources OrgParserState (ReaderT OrgParserLocal m)
+type OrgParser m = ParsecT Sources OrgParserState (ReaderT OrgParserLocal m)
 
 --
 -- Adaptions and specializations of parsing utilities
@@ -163,7 +164,7 @@ inList = do
 -- | Parse in different context
 withContext :: Monad m
             => ParserContext -- ^ New parser context
-            -> OrgParser m a   -- ^ Parser to run in that context
+            -> OrgParser m a   -- ^ Parsec to run in that context
             -> OrgParser m a
 withContext context parser = do
   oldContext <- orgStateParserContext <$> getState
@@ -173,7 +174,7 @@ withContext context parser = do
   return result
 
 --
--- Parser state functions
+-- Parsec state functions
 --
 
 -- | Get an export setting.
@@ -216,3 +217,16 @@ orgTagWord = many1Char orgTagWordChar
 
 orgTagWordChar :: Monad m => OrgParser m Char
 orgTagWordChar = alphaNum <|> oneOf "@%#_"
+
+orgAnchor :: Monad m => OrgParser m Text
+orgAnchor = try $ do
+  string "<<"
+  anchorId <- many1Char (noneOf "\t\n\r<>\"' ")
+  string ">>"
+  skipSpaces
+  recordAnchorId anchorId
+  return anchorId
+
+recordAnchorId :: Monad m => Text -> OrgParser m ()
+recordAnchorId i = updateState $ \s ->
+  s{ orgStateAnchorIds = i : orgStateAnchorIds s }

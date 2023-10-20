@@ -1,4 +1,5 @@
 {-# LANGUAGE ViewPatterns      #-}
+{-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
@@ -59,6 +60,7 @@ module Text.Pandoc.Readers.Docx.Parse ( Docx(..)
 import Text.Pandoc.Readers.Docx.Parse.Styles
 import Codec.Archive.Zip
 import Control.Applicative ((<|>))
+import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.State.Strict
@@ -84,13 +86,15 @@ import Text.Pandoc.XML.Light
       strContent,
       showElement,
       findAttr,
+      filterChild,
       filterChildrenName,
       filterElementName,
+      lookupAttrBy,
       parseXMLElement,
       elChildren,
       QName(QName, qName),
       Content(Elem),
-      Element(elContent, elName),
+      Element(..),
       findElements )
 
 data ReaderEnv = ReaderEnv { envNotes         :: Notes
@@ -219,6 +223,7 @@ data TrackedChange = TrackedChange ChangeType ChangeInfo
 
 data ParagraphStyle = ParagraphStyle { pStyle      :: [ParStyle]
                                      , indentation :: Maybe ParIndentation
+                                     , numbered    :: Bool
                                      , dropCap     :: Bool
                                      , pChange     :: Maybe TrackedChange
                                      , pBidi       :: Maybe Bool
@@ -228,6 +233,7 @@ data ParagraphStyle = ParagraphStyle { pStyle      :: [ParStyle]
 defaultParagraphStyle :: ParagraphStyle
 defaultParagraphStyle = ParagraphStyle { pStyle = []
                                        , indentation = Nothing
+                                       , numbered    = False
                                        , dropCap     = False
                                        , pChange     = Nothing
                                        , pBidi       = Just False
@@ -238,7 +244,6 @@ data BodyPart = Paragraph ParagraphStyle [ParPart]
               | ListItem ParagraphStyle T.Text T.Text (Maybe Level) [ParPart]
               | Tbl T.Text TblGrid TblLook [Row]
               | TblCaption ParagraphStyle [ParPart]
-              | OMathPara [Exp]
               deriving Show
 
 type TblGrid = [Integer]
@@ -278,12 +283,12 @@ rowsToRowspans rows = let
       -> Maybe Integer -- Number of columns left below
       -> Maybe [(Int, Cell)] -- (rowspan so far, cell) for the row below this one
       -> [(Int, Cell)] -- (rowspan so far, cell) for this row
-    g cells _ Nothing = zip (repeat 1) cells
+    g cells _ Nothing = map (1,) cells
     g cells columnsLeftBelow (Just rowBelow) =
         case cells of
           [] -> []
           thisCell@(Cell thisGridSpan _ _) : restOfRow -> case rowBelow of
-            [] -> zip (repeat 1) cells
+            [] -> map (1,) cells
             (spanSoFarBelow, Cell gridSpanBelow vmerge _) : _ ->
               let spanSoFar = case vmerge of
                     Restart -> 1
@@ -309,6 +314,7 @@ leftBiasedMergeRunStyle a b = RunStyle
     , isStrike = isStrike a <|> isStrike b
     , isRTL = isRTL a <|> isRTL b
     , isForceCTL = isForceCTL a <|> isForceCTL b
+    , rHighlight = rHighlight a <|> rHighlight b
     , rVertAlign = rVertAlign a <|> rVertAlign b
     , rUnderline = rUnderline a <|> rUnderline b
     , rParentStyle = rParentStyle a
@@ -328,6 +334,7 @@ data ParPart = PlainRun Run
              | Chart                                              -- placeholder for now
              | Diagram                                            -- placeholder for now
              | PlainOMath [Exp]
+             | OMathPara [Exp]
              | Field FieldInfo [ParPart]
              deriving Show
 
@@ -688,50 +695,68 @@ pHeading = getParStyleField headingLev . pStyle
 pNumInfo :: ParagraphStyle -> Maybe (T.Text, T.Text)
 pNumInfo = getParStyleField numInfo . pStyle
 
+mkListItem :: ParagraphStyle -> Text -> Text -> [ParPart] -> D BodyPart
+mkListItem parstyle numId lvl parparts = do
+  lvlInfo <- lookupLevel numId lvl <$> asks envNumbering
+  return $ ListItem parstyle numId lvl lvlInfo parparts
+
 pStyleIndentation :: ParagraphStyle -> Maybe ParIndentation
 pStyleIndentation style = (getParStyleField indent . pStyle) style
 
 elemToBodyPart :: NameSpaces -> Element -> D BodyPart
 elemToBodyPart ns element
-  | isElem ns "w" "p" element
-  , (c:_) <- findChildrenByName ns "m" "oMathPara" element = do
-      expsLst <- eitherToD $ readOMML $ showElement c
-      return $ OMathPara expsLst
+  | isElem ns "m" "oMathPara" element = do
+      expsLst <- eitherToD $ readOMML $ showElement element
+      parstyle <- elemToParagraphStyle ns element
+                  <$> asks envParStyles
+                  <*> asks envNumbering
+      return $ Paragraph parstyle [OMathPara expsLst]
 elemToBodyPart ns element
   | isElem ns "w" "p" element
   , Just (numId, lvl) <- getNumInfo ns element = do
-    parstyle <- elemToParagraphStyle ns element <$> asks envParStyles
+    parstyle <- elemToParagraphStyle ns element
+                <$> asks envParStyles
+                <*> asks envNumbering
     parparts <- mconcat <$> mapD (elemToParPart ns) (elChildren element)
-    levelInfo <- lookupLevel numId lvl <$> asks envNumbering
-    return $ ListItem parstyle numId lvl levelInfo parparts
+    case pHeading parstyle of
+      Nothing -> mkListItem parstyle numId lvl parparts
+      Just _  -> do
+        return $ Paragraph parstyle parparts
 elemToBodyPart ns element
   | isElem ns "w" "p" element = do
-      parstyle <- elemToParagraphStyle ns element <$> asks envParStyles
-      parparts' <- mconcat <$> mapD (elemToParPart ns) (elChildren element)
+      parstyle <- elemToParagraphStyle ns element
+                  <$> asks envParStyles
+                  <*> asks envNumbering
+
+      let hasCaptionStyle = elem "Caption" (pStyleId <$> pStyle parstyle)
+
+      let isTableNumberElt el@(Element name attribs _ _) =
+           (qName name == "fldSimple" &&
+             case lookupAttrBy ((== "instr") . qName) attribs of
+               Nothing -> False
+               Just instr -> "Table" `elem` T.words instr) ||
+           (qName name == "instrText" && "Table" `elem` T.words (strContent el))
+
+      let isTable = hasCaptionStyle &&
+                      isJust (filterChild isTableNumberElt element)
+
+      let stripOffLabel = dropWhile (not . isTableNumberElt)
+
+      let children = (if isTable
+                          then stripOffLabel
+                          else id) $ elChildren element
+      parparts' <- mconcat <$> mapD (elemToParPart ns) children
       fldCharState <- gets stateFldCharState
       modify $ \st -> st {stateFldCharState = emptyFldCharContents fldCharState}
       -- Word uses list enumeration for numbered headings, so we only
       -- want to infer a list from the styles if it is NOT a heading.
-      let parparts = parparts' ++ (openFldCharsToParParts fldCharState) in
-        case pHeading parstyle of
-          Nothing | Just (numId, lvl) <- pNumInfo parstyle -> do
-                      levelInfo <- lookupLevel numId lvl <$> asks envNumbering
-                      return $ ListItem parstyle numId lvl levelInfo parparts
-          _ -> let
-            hasCaptionStyle = elem "Caption" (pStyleId <$> pStyle parstyle)
-
-            hasSimpleTableField = fromMaybe False $ do
-              fldSimple <- findChildByName ns "w" "fldSimple" element
-              instr <- findAttrByName ns "w" "instr" fldSimple
-              pure ("Table" `elem` T.words instr)
-
-            hasComplexTableField = fromMaybe False $ do
-              instrText <- findElementByName ns "w" "instrText" element
-              pure ("Table" `elem` T.words (strContent instrText))
-
-            in if hasCaptionStyle && (hasSimpleTableField || hasComplexTableField)
-              then return $ TblCaption parstyle parparts
-              else return $ Paragraph parstyle parparts
+      let parparts = parparts' ++ (openFldCharsToParParts fldCharState)
+      case pHeading parstyle of
+        Nothing | Just (numId, lvl) <- pNumInfo parstyle -> do
+                    mkListItem parstyle numId lvl parparts
+        _ -> if isTable
+                then return $ TblCaption parstyle parparts
+                else return $ Paragraph parstyle parparts
 
 elemToBodyPart ns element
   | isElem ns "w" "tbl" element = do
@@ -793,7 +818,8 @@ expandDrawingId s = do
 
 getTitleAndAlt :: NameSpaces -> Element -> (T.Text, T.Text)
 getTitleAndAlt ns element =
-  let mbDocPr = findChildByName ns "wp" "inline" element >>=
+  let mbDocPr = (findChildByName ns "wp" "inline" element <|>   -- Word
+                 findChildByName ns "wp" "anchor" element) >>=  -- LibreOffice
                 findChildByName ns "wp" "docPr"
       title = fromMaybe "" (mbDocPr >>= findAttrByName ns "" "title")
       alt = fromMaybe "" (mbDocPr >>= findAttrByName ns "" "descr")
@@ -897,10 +923,9 @@ elemToParPart' ns element
   , pic_ns <- "http://schemas.openxmlformats.org/drawingml/2006/picture"
   , picElems <- findElements (QName "pic" (Just pic_ns) (Just "pic")) drawingElem
   = let (title, alt) = getTitleAndAlt ns drawingElem
-        a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
         drawings = map (\el ->
-                        ((findElement (QName "blip" (Just a_ns) (Just "a")) el
-                          >>= findAttrByName ns "r" "embed"), el)) picElems
+                        ((findBlip el >>= findAttrByName ns "r" "embed"), el))
+                       picElems
     in mapM (\case
                 (Just s, el) -> do
                   (fp, bs) <- expandDrawingId s
@@ -985,6 +1010,9 @@ elemToParPart' ns element
 elemToParPart' ns element
   | isElem ns "m" "oMath" element =
     fmap (return . PlainOMath) (eitherToD $ readOMML $ showElement element)
+elemToParPart' ns element
+  | isElem ns "m" "oMathPara" element =
+    fmap (return . OMathPara) (eitherToD $ readOMML $ showElement element)
 elemToParPart' _ _ = throwError WrongElem
 
 elemToCommentStart :: NameSpaces -> Element -> D [ParPart]
@@ -1019,10 +1047,9 @@ childElemToRun ns element
   , pic_ns <- "http://schemas.openxmlformats.org/drawingml/2006/picture"
   , picElems <- findElements (QName "pic" (Just pic_ns) (Just "pic")) element
   = let (title, alt) = getTitleAndAlt ns element
-        a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
         drawings = map (\el ->
-                         ((findElement (QName "blip" (Just a_ns) (Just "a")) el
-                             >>= findAttrByName ns "r" "embed"), el)) picElems
+                         ((findBlip el >>= findAttrByName ns "r" "embed"), el))
+                   picElems
     in mapM (\case
                 (Just s, el) -> do
                   (fp, bs) <- expandDrawingId s
@@ -1115,15 +1142,22 @@ getTrackedChange ns element
       Just $ TrackedChange Deletion (ChangeInfo cId cAuthor mcDate)
 getTrackedChange _ _ = Nothing
 
-elemToParagraphStyle :: NameSpaces -> Element -> ParStyleMap -> ParagraphStyle
-elemToParagraphStyle ns element sty
+elemToParagraphStyle :: NameSpaces -> Element
+                     -> ParStyleMap
+                     -> Numbering
+                     -> ParagraphStyle
+elemToParagraphStyle ns element sty numbering
   | Just pPr <- findChildByName ns "w" "pPr" element =
     let style =
           mapMaybe
           (fmap ParaStyleId . findAttrByName ns "w" "val")
           (findChildrenByName ns "w" "pStyle" pPr)
+        pStyle' = mapMaybe (`M.lookup` sty) style
     in ParagraphStyle
-      {pStyle = mapMaybe (`M.lookup` sty) style
+      {pStyle = pStyle'
+      , numbered = case getNumInfo ns element of
+          Just (numId, lvl) -> isJust $ lookupLevel numId lvl numbering
+          Nothing -> isJust $ getParStyleField numInfo pStyle'
       , indentation =
           getIndentation ns element
       , dropCap =
@@ -1143,7 +1177,7 @@ elemToParagraphStyle ns element sty
                       getTrackedChange ns
       , pBidi = checkOnOff ns pPr (elemName ns "w" "bidi")
       }
-elemToParagraphStyle _ _ _ =  defaultParagraphStyle
+  | otherwise = defaultParagraphStyle
 
 elemToRunStyleD :: NameSpaces -> Element -> D RunStyle
 elemToRunStyleD ns element
@@ -1208,3 +1242,11 @@ elemToRunElems _ _ = throwError WrongElem
 
 setFont :: Maybe Font -> ReaderEnv -> ReaderEnv
 setFont f s = s{envFont = f}
+
+findBlip :: Element -> Maybe Element
+findBlip el = do
+  blip <- findElement (QName "blip" (Just a_ns) (Just "a")) el
+  -- return svg if present:
+  filterElementName (\(QName tag _ _) -> tag == "svgBlip") el `mplus` pure blip
+ where
+  a_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"

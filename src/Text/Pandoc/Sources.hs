@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -5,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Sources
-   Copyright   : Copyright (C) 2021-2022 John MacFarlane
+   Copyright   : Copyright (C) 2021-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -45,6 +46,8 @@ import Text.Parsec (Stream(..), ParsecT)
 import Text.Parsec.Pos as P
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as BL
 import Data.Char (isSpace, isLetter, isAlphaNum, isDigit, isHexDigit)
 import Data.String (IsString(..))
 import qualified Data.List.NonEmpty as NonEmpty
@@ -111,6 +114,15 @@ class UpdateSourcePos s c where
 instance UpdateSourcePos Text Char where
    updateSourcePos pos c _ = updatePosChar pos c
 
+instance UpdateSourcePos [Char] Char where
+   updateSourcePos pos c _ = updatePosChar pos c
+
+instance UpdateSourcePos BS.ByteString Char where
+   updateSourcePos pos c _ = updatePosChar pos c
+
+instance UpdateSourcePos BL.ByteString Char where
+   updateSourcePos pos c _ = updatePosChar pos c
+
 instance UpdateSourcePos Sources Char where
    updateSourcePos pos c sources =
      case sources of
@@ -144,7 +156,7 @@ satisfy :: (Monad m, Stream s m Char, UpdateSourcePos s Char)
          => (Char -> Bool) -> ParsecT s u m Char
 satisfy f = P.tokenPrim show updateSourcePos matcher
  where
-  matcher c = if f c then Just c else Nothing
+  matcher !c = if f c then Just c else Nothing
 
 oneOf :: (Monad m, Stream s m Char, UpdateSourcePos s Char)
       => [Char] -> ParsecT s u m Char

@@ -5,15 +5,17 @@ on:
     branches:
     - '*'
     - '!rc/*'
+    - '!typst-writer'
     paths-ignore:
-    - 'doc/**'
+    - 'doc/*.md'
     - 'MANUAL.txt'
     - '*.md'
+    - '.cirrus.yml'
     - 'RELEASE_CHECKLIST'
     - 'BUGS'
-    - 'changelog'
     - 'README.template'
-    - 'appveyor.yml'
+    - 'hie.yaml'
+    - '*.nix'
     - 'tools/**'
     - 'linux/**'
     - 'macos/**'
@@ -21,240 +23,226 @@ on:
     - 'man/**'
   pull_request:
     paths-ignore:
-    - 'doc/**'
+    - 'doc/*.md'
     - 'MANUAL.txt'
     - '*.md'
     - 'RELEASE_CHECKLIST'
     - 'BUGS'
-    - 'changelog'
     - 'README.template'
-    - 'appveyor.yml'
+    - 'hie.yaml'
+    - '*.nix'
     - 'tools/**'
     - 'linux/**'
     - 'macos/**'
     - 'windows/**'
     - 'man/**'
 
+permissions:
+  contents: read
+
 jobs:
   linux:
 
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: true
       matrix:
         versions:
-          - ghc: '8.6.5'
-            cabal: '3.2'
-            prefix: ''
-            cabalopts: '-f-embed_data_files'
-            testopts: '--test-option=--hide-successes --test-option=--ansi-tricks=false'
-          - ghc: '8.8.4'
-            cabal: '3.2'
-            prefix: ''
+          - ghc: '8.10'
+            cabal: 'latest'
             cabalopts: ''
-            testopts: '--test-option=--hide-successes --test-option=--ansi-tricks=false'
-          - ghc: '8.10.7'
-            cabal: '3.2'
-            prefix: ''
-            cabalopts: '-ftrypandoc'
-            testopts: '--test-option=--hide-successes --test-option=--ansi-tricks=false'
-          - ghc: '9.0.1'
-            cabal: '3.4'
-            prefix: ''
+          - ghc: '9.0'
+            cabal: 'latest'
             cabalopts: ''
-            testopts: '--test-option=--hide-successes --test-option=--ansi-tricks=false'
+          - ghc: '9.2'
+            cabal: 'latest'
+            cabalopts: ''
+          - ghc: '9.4'
+            cabal: 'latest'
+            cabalopts: ''
+          - ghc: '9.6'
+            cabal: 'latest'
+            cabalopts: ''
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     # needed by memory
     - name: Install numa
       run: sudo apt-get install libnuma-dev
 
-    # need to install older cabal/ghc versions from ppa repository
+    - name: Workaround runner image issue
+      # https://github.com/actions/runner-images/issues/7061
+      run: sudo chown -R $USER /usr/local/.ghcup
 
-    - name: Install recent cabal/ghc
-      uses: haskell/actions/setup@v1
-      with:
-        ghc-version: ${{ matrix.versions.ghc }}
-        cabal-version: ${{ matrix.versions.cabal }}
+    - name: Install cabal/ghc
+      run: |
+        ghcup install ghc --set ${{ matrix.versions.ghc }}
+        ghcup install cabal --set ${{ matrix.versions.cabal }}
 
     # declare/restore cached things
-    # caching doesn't work for scheduled runs yet
-    # https://github.com/actions/cache/issues/63
 
     - name: Cache cabal global package db
       id:   cabal-global
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         path: |
-          ~/.cabal
-        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ hashFiles('cabal.project') }}
+          ~/.local/state/cabal
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ secrets.CACHE_VERSION }}
 
     - name: Cache cabal work
       id:   cabal-local
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         path: |
           dist-newstyle
-        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local-${{ secrets.CACHE_VERSION }}
 
-    - name: Install dependencies
+    - name: Update cabal
       run: |
-          cabal ${{ matrix.versions.prefix }}update
-          cabal ${{ matrix.versions.prefix }}build ${{ matrix.versions.cabalopts }} --dependencies-only --enable-tests --disable-optimization
+          cabal update
 
     - name: Build and test
       run: |
-          cabal ${{ matrix.versions.prefix }}build ${{ matrix.versions.cabalopts }} --enable-tests --disable-optimization 2>&1 | tee build.log
-          # fail if warnings in local build
-          ! grep -q ": *[Ww]arning:" build.log || exit 1
-          cabal ${{ matrix.versions.prefix }}test ${{ matrix.versions.cabalopts }} --disable-optimization ${{ matrix.versions.testopts }}
+          cabal test ${{ matrix.versions.cabalopts }} --enable-tests --disable-optimization --ghc-options=-Werror all
+
+  linux-stack:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+    steps:
+    - uses: actions/checkout@v4
+
+    # needed by memory
+    - name: Install numa
+      run: sudo apt-get install libnuma-dev
+
+    # declare/restore cached things
+    - name: Cache stack global package db
+      id:   stack-global
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.stack
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-stack-global-${{ secrets.CACHE_VERSION }}
+
+    - name: Cache stack work
+      id:   stack-local
+      uses: actions/cache@v3
+      with:
+        path: |
+          .stack-work
+        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-stack-local-${{ secrets.CACHE_VERSION }}
+
+    - name: Build and test
+      run: |
+          stack test --fast
+
+  linux-nix-cabal:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+    steps:
+    - uses: actions/checkout@v4
+    - uses: cachix/install-nix-action@v23
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - name: Cache cabal global package db
+      id:   cabal-global
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.local/state/cabal
+        key: ${{ runner.os }}-nix-cabal-global-${{ secrets.CACHE_VERSION }}
+    - name: Cache cabal work
+      id:   cabal-local
+      uses: actions/cache@v3
+      with:
+        path: |
+          dist-newstyle
+        key: ${{ runner.os }}-nix-cabal-local-${{ secrets.CACHE_VERSION }}
+    - run: |
+        nix-shell --run "cabal update && cabal test --enable-tests --disable-optimization --ghc-options=-Werror all"
 
   windows:
 
     runs-on: windows-2019
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
-    # We should have ghc 8.10, cabal, stack pre-installed
-    # - uses: haskell/actions/setup@v1
-    #   with:
-    #     enable-stack: true
-    #     stack-version: 'latest'
+    - name: Install ghc
+      run: |
+        ghcup install ghc --set 9.4.4
 
     # declare/restore cached things
-    # caching doesn't work for scheduled runs yet
-    # https://github.com/actions/cache/issues/63
-
-    - name: Cache stack global package db
-      id:   stack-global-package-db
-      uses: actions/cache@v2
-      with:
-        path: |
-          C:\Users\runneradmin\AppData\Roaming\stack\
-        key: ${{ runner.os }}-appdata-roaming-stack-${{ hashFiles('stack.yaml') }}
-
-    # stack's local package dbs for the project and each package
-    # - name: Cache .stack-work
-    #   uses: actions/cache@v1
-    #   with:
-    #     path: .stack-work
-    #     key:          ${{ runner.os }}-stack-work-${{ hashFiles('stack.yaml') }}
-    #     restore-keys: ${{ runner.os }}-stack-work
-
-    - name: Install dependencies
-      run: |
-          stack update
-          stack install happy
-          stack test --dependencies-only --fast
-    - name: Build and test
-      shell: cmd
-      run: |
-          stack test --fast --test-arguments="--hide-successes --ansi-tricks=false"
-
-  macos:
-
-    runs-on: macOS-10.15
-    strategy:
-      fail-fast: true
-      matrix:
-        versions:
-          - ghc: '8.8.4'
-            cabal: '3.2'
-
-    steps:
-    - uses: actions/checkout@v2
-
-    - name: Install recent cabal/ghc
-      uses: haskell/actions/setup@v1
-      with:
-        ghc-version: ${{ matrix.versions.ghc }}
-        cabal-version: ${{ matrix.versions.cabal }}
-
-    # declare/restore cached things
-    # caching doesn't work for scheduled runs yet
-    # https://github.com/actions/cache/issues/63
 
     - name: Cache cabal global package db
       id:   cabal-global
-      uses: actions/cache@v2
+      uses: actions/cache@v3
       with:
         path: |
-          ~/.cabal
-        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ hashFiles('cabal.project') }}
+          C:\cabal\store
+        key: ${{ runner.os }}-appdata-cabal-${{ hashFiles('cabal.project') }}-${{ secrets.CACHE_VERSION }}
 
     - name: Cache cabal work
-      id:   cabal-local
-      uses: actions/cache@v2
+      id: cabal-local
+      uses: actions/cache@v3
       with:
         path: |
           dist-newstyle
-        key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local
+        key: ${{ runner.os }}-stack-work-${{ hashFiles('cabal.project') }}-${{ secrets.CACHE_VERSION }}
 
     - name: Install dependencies
       run: |
-          cabal v2-update
-          cabal v2-build --dependencies-only --enable-tests --disable-optimization
-    - name: Build and test
-      run: |
-          cabal v2-build --enable-tests --disable-optimization 2>&1 | tee build.log
-          # fail if warnings in local build
-          ! grep -q ": *[Ww]arning:" build.log || exit 1
-          cabal v2-test --disable-optimization --test-option=--hide-successes --test-option=--ansi-tricks=false
+          cabal update
+          cabal test ${{ matrix.versions.cabalopts }} --enable-tests --disable-optimization --ghc-options=-Werror all
 
-  benchmark:
+# We no longer run the macos tests, to make CI faster.
+# macos:
 
-    runs-on: ubuntu-18.04
-    strategy:
-      fail-fast: true
-      matrix:
-        versions:
-          - ghc: '8.8.4'
-            cabal: '3.2'
-          - ghc: '8.10.7'
-            cabal: '3.2'
-    steps:
-    - uses: actions/checkout@v2
+#   runs-on: macos-11
+#   strategy:
+#     fail-fast: true
+#     matrix:
+#       versions:
+#         - ghc: '8.8.4'
+#           cabal: '3.2'
 
-    # need to install older cabal/ghc versions from ppa repository
+#   steps:
+#   - uses: actions/checkout@v4
 
-    - name: Install recent cabal/ghc
-      uses: haskell/actions/setup@v1
-      with:
-        ghc-version: ${{ matrix.versions.ghc }}
-        cabal-version: ${{ matrix.versions.cabal }}
+#   - name: Install cabal/ghc
+#     run: |
+#       ghcup install ghc --set ${{ matrix.versions.ghc }}
+#       ghcup install cabal ${{ matrix.versions.cabal }}
 
-    # declare/restore cached things
-    # caching doesn't work for scheduled runs yet
-    # https://github.com/actions/cache/issues/63
+#   # declare/restore cached things
 
-    - name: Cache cabal global package db
-      id:   cabal-global
-      uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cabal
-        key: benchmark-${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ hashFiles('cabal.project') }}
+#   - name: Cache cabal global package db
+#     id:   cabal-global
+#     uses: actions/cache@v3
+#     with:
+#       path: |
+#         ~/.cabal
+#       key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-global-${{ secrets.CACHE_VERSION }}
 
-    - name: Cache cabal work
-      id:   cabal-local
-      uses: actions/cache@v2
-      with:
-        path: |
-          dist-newstyle
-        key: benchmark-${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local
+#   - name: Cache cabal work
+#     id:   cabal-local
+#     uses: actions/cache@v3
+#     with:
+#       path: |
+#         dist-newstyle
+#       key: ${{ runner.os }}-${{ matrix.versions.ghc }}-${{ matrix.versions.cabal }}-cabal-local-${{ secrets.CACHE_VERSION }}
 
-    - name: Install dependencies
-      run: |
-          v2=$([ "${{ matrix.versions.cabal }}" = "2.2" ] && printf 'new' || printf 'v2')
-          cabal $v2-update
-          cabal $v2-build --dependencies-only --enable-optimization=1 --enable-benchmarks --disable-tests
-
-    - name: Build and test
-      run: |
-          v2=$([ "${{ matrix.versions.cabal }}" = "2.2" ] && printf 'new' || printf 'v2')
-          cabal $v2-build --enable-optimization=1 --enable-benchmarks --disable-tests 2>&1 | tee build.log
-          # fail if warnings in local build
-          ! grep -q ": *[Ww]arning:" build.log || exit 1
-          cabal $v2-bench --enable-optimization=1 --benchmark-options='--timeout=6 +RTS -T -RTS'
+#   - name: Install dependencies
+#     run: |
+#         cabal v2-update
+#         cabal v2-build --dependencies-only --enable-tests --disable-optimization
+#   - name: Build and test
+#     run: |
+#         cabal v2-build --enable-tests --disable-optimization 2>&1 | tee build.log
+#         # fail if warnings in local build
+#         ! grep -q ": *[Ww]arning:" build.log || exit 1
+#         cabal v2-test --disable-optimization --test-option=--hide-successes --test-option=--ansi-tricks=false

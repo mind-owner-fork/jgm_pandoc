@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings  #-}
 {- |
    Module      : Text.Pandoc.Logging
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -63,6 +63,7 @@ data LogMessage =
   | UndefinedToggle Text SourcePos
   | ParsingUnescaped Text SourcePos
   | CouldNotLoadIncludeFile Text SourcePos
+  | CouldNotParseIncludeFile Text SourcePos
   | MacroAlreadyDefined Text SourcePos
   | InlineNotRendered Inline
   | BlockNotRendered Block
@@ -78,6 +79,7 @@ data LogMessage =
   | Fetching Text
   | Extracting Text
   | LoadedResource FilePath FilePath
+  | ScriptingWarning Text (Maybe SourcePos)
   | NoTitleElement Text
   | NoLangSpecified
   | InvalidLang Text
@@ -156,6 +158,11 @@ instance ToJSON LogMessage where
             "source" .= sourceName pos,
             "line" .= toJSON (sourceLine pos),
             "column" .= toJSON (sourceColumn pos)]
+      CouldNotParseIncludeFile fp pos ->
+           ["path" .= fp,
+            "source" .= sourceName pos,
+            "line" .= toJSON (sourceLine pos),
+            "column" .= toJSON (sourceColumn pos)]
       MacroAlreadyDefined name pos ->
            ["name" .= name,
             "source" .= sourceName pos,
@@ -194,6 +201,14 @@ instance ToJSON LogMessage where
       LoadedResource orig found ->
            ["for"  .= orig
            ,"from" .= found]
+      ScriptingWarning msg mbpos ->
+           ["message" .= msg] <>
+           case mbpos of
+             Nothing  -> []
+             Just pos -> ["source" .= sourceName pos
+                         ,"line" .= toJSON (sourceLine pos)
+                         ,"column" .= toJSON (sourceColumn pos)
+                         ]
       NoTitleElement fallback ->
            ["fallback" .= fallback]
       NoLangSpecified -> []
@@ -280,6 +295,8 @@ showLogMessage msg =
          "Parsing unescaped '" <> s <> "' at " <> showPos pos
        CouldNotLoadIncludeFile fp pos ->
          "Could not load include file " <> fp <> " at " <> showPos pos
+       CouldNotParseIncludeFile fp pos ->
+         "Parsing include file " <> fp <> " failed at " <> showPos pos
        MacroAlreadyDefined name pos ->
          "Macro '" <> name <> "' already defined, ignoring at " <> showPos pos
        InlineNotRendered il ->
@@ -314,6 +331,9 @@ showLogMessage msg =
          "Extracting " <> fp <> "..."
        LoadedResource orig found ->
          "Loaded " <> Text.pack orig <> " from " <> Text.pack found
+       ScriptingWarning s mbpos ->
+         "Scripting warning" <>
+         maybe "" (\pos -> " at " <> showPos pos) mbpos  <> ": " <> s
        NoTitleElement fallback ->
          "This document format requires a nonempty <title> element.\n" <>
          "Defaulting to '" <> fallback <> "' as the title.\n" <>
@@ -383,6 +403,7 @@ messageVerbosity msg =
        CouldNotLoadIncludeFile f _
         | ".sty" `Text.isSuffixOf` f -> INFO
         | otherwise                  -> WARNING
+       CouldNotParseIncludeFile{}    -> WARNING
        MacroAlreadyDefined{}         -> WARNING
        ParsingUnescaped{}            -> INFO
        InlineNotRendered{}           -> INFO
@@ -399,6 +420,7 @@ messageVerbosity msg =
        Fetching{}                    -> INFO
        Extracting{}                  -> INFO
        LoadedResource{}              -> INFO
+       ScriptingWarning{}            -> WARNING
        NoTitleElement{}              -> WARNING
        NoLangSpecified               -> INFO
        InvalidLang{}                 -> WARNING

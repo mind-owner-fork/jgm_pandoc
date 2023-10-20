@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.HTML
-   Copyright   : © 2006-2022 John MacFarlane
+   Copyright   : © 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -98,6 +98,18 @@ tests = [ testGroup "base tag"
           , test htmlNativeDivs "<main> followed by text" $ "<main>main content</main>non-main content" =?>
             doc (divWith ("", [], [("role", "main")]) (plain (text "main content")) <> plain (text "non-main content"))
           ]
+        , testGroup "code"
+          [
+            test html "inline code block" $
+            "<code>Answer is 42</code>" =?>
+            plain (codeWith ("",[],[]) "Answer is 42")
+          ]
+        , testGroup "tt"
+          [
+            test html "inline tt block" $
+            "<tt>Answer is 42</tt>" =?>
+            plain (codeWith ("",[],[]) "Answer is 42")
+          ]
         , testGroup "samp"
           [
             test html "inline samp block" $
@@ -120,7 +132,7 @@ tests = [ testGroup "base tag"
             =?>
             codeBlockWith ("a", ["python"], []) "print('hi')"
 
-          , test html "attributes in pre take precendence" $
+          , test html "attributes in pre take precedence" $
             "<pre id=\"c\"><code id=\"d\">\nprint('hi mom!')\n</code></pre>"
             =?>
             codeBlockWith ("c", [], []) "print('hi mom!')"

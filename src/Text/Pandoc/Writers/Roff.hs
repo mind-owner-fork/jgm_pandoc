@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Roff
-   Copyright   : Copyright (C) 2007-2022 John MacFarlane
+   Copyright   : Copyright (C) 2007-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -112,9 +112,11 @@ fontChange = do
                        fromMaybe False (Map.lookup 'B' features)] ++
                 ['I' | fromMaybe False $ Map.lookup 'I' features]
   return $
-    if null filling
-       then text "\\f[R]"
-       else text $ "\\f[" ++ filling ++ "]"
+    case filling of
+      [] -> text "\\f[R]"
+      -- see #9020. C is not a font, use CR.
+      ['C'] -> text "\\f[CR]"
+      _ -> text $ "\\f[" ++ filling ++ "]"
 
 withFontFeature :: (HasChars a, IsString a, PandocMonad m)
                 => Char -> MS m (Doc a) -> MS m (Doc a)

@@ -17,7 +17,9 @@ into InDesign with File -> Place.
 -}
 module Text.Pandoc.Writers.ICML (writeICML) where
 import Control.Monad.Except (catchError)
+import Control.Monad (liftM2)
 import Control.Monad.State.Strict
+    ( MonadTrans(lift), StateT(runStateT), MonadState(state, get, put) )
 import Data.List (intersperse)
 import Data.Maybe (fromMaybe, maybeToList)
 import qualified Data.Set as Set
@@ -30,6 +32,7 @@ import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
+import Text.Pandoc.URI (isURI)
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Math (texMathToInlines)
 import Text.Pandoc.Writers.Shared
@@ -131,7 +134,8 @@ citeName          = "Cite"
 
 -- | Convert Pandoc document to string in ICML format.
 writeICML :: PandocMonad m => WriterOptions -> Pandoc -> m Text
-writeICML opts (Pandoc meta blocks) = do
+writeICML opts doc = do
+  let Pandoc meta blocks = ensureValidXmlIdentifiers doc
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
@@ -308,10 +312,6 @@ blocksToICML opts style lst = do
 -- | Convert a Pandoc block element to ICML.
 blockToICML :: PandocMonad m => WriterOptions -> Style -> Block -> WS m (Doc Text)
 blockToICML opts style (Plain lst) = parStyle opts style "" lst
-blockToICML opts style (SimpleFigure attr txt (src, tit)) = do
-  figure  <- parStyle opts (figureName:style) "" [Image attr txt (src, tit)]
-  caption <- parStyle opts (imgCaptionName:style) "" txt
-  return $ intersperseBrs [figure, caption]
 blockToICML opts style (Para lst) = parStyle opts (paragraphName:style) "" lst
 blockToICML opts style (LineBlock lns) =
   blockToICML opts style $ linesToPara lns
@@ -332,8 +332,9 @@ blockToICML opts style (Header lvl (ident, cls, _) lst) =
                    else ""
   in parStyle opts stl ident lst
 blockToICML _ _ HorizontalRule = return empty -- we could insert a page break instead
-blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
-  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+blockToICML opts style (Table attr blkCapt specs thead tbody tfoot) =
+  let (caption, aligns, widths, headers, rows) =
+        toLegacyTable blkCapt specs thead tbody tfoot
       style' = tableName : style
       noHeader  = all null headers
       nrHeaders = if noHeader
@@ -369,8 +370,10 @@ blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
             [("SingleColumnWidth",tshow $ 500 * w) | w > 0]
       let tupToDoc tup = selfClosingTag "Column" $ ("Name",tshow $ fst tup) : colWidths (snd tup)
       let colDescs = vcat $ zipWith (curry tupToDoc) [0..nrCols-1] widths
+      let (_,_,kvs) = attr
+      let dynamicStyle = fromMaybe "Table" (lookup dynamicStyleKey kvs)
       let tableDoc = return $ inTags True "Table" [
-                         ("AppliedTableStyle","TableStyle/Table")
+                         ("AppliedTableStyle","TableStyle/" <> dynamicStyle)
                        , ("HeaderRowCount", nrHeaders)
                        , ("BodyRowCount", tshow nrRows)
                        , ("ColumnCount", tshow nrCols)
@@ -379,7 +382,16 @@ blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
 blockToICML opts style (Div (_ident, _, kvs) lst) =
   let dynamicStyle = maybeToList $ lookup dynamicStyleKey kvs
   in  blocksToICML opts (dynamicStyle <> style) lst
-blockToICML _ _ Null = return empty
+blockToICML opts style (Figure attr capt@(Caption _ longcapt) body) =
+  case body of
+    [Plain [img@(Image {})]] -> do
+      figure  <- parStyle opts (figureName:style) "" [img]
+      caption <- parStyle opts (imgCaptionName:style) "" $
+                 blocksToInlines longcapt
+      return $ intersperseBrs [figure, caption]
+    _ -> -- fallback to rendering the figure as a Div
+      blockToICML opts style $ figureDiv attr capt body
+
 
 -- | Convert a list of lists of blocks to ICML list items.
 listItemsToICML :: PandocMonad m => WriterOptions -> Text -> Style -> Maybe ListAttributes -> [[Block]] -> WS m (Doc Text)
@@ -482,7 +494,7 @@ inlineToICML opts style _ (Span (ident, _, kvs) lst) =
   in  inlinesToICML opts (dynamicStyle <> style) ident lst
 -- ident will be the id of the span, that we need to use down in the hyperlink setter
 --  if T.null ident
---     then 
+--     then
 --     else do
 
 -- | Convert a list of block elements to an ICML footnote.
@@ -555,7 +567,7 @@ makeLinkDest ident cont = vcat [
 -- | Create the markup for the content (incl. named destinations)
 -- |  NOTE: since we have no easy way to get actual named dests, we just create them for any short content blocks
 makeContent :: Text -> Doc Text -> Doc Text
-makeContent ident cont 
+makeContent ident cont
               | isEmpty cont = empty
               | not (Text.null ident) = makeLinkDest ident cont
               | otherwise = inTagsSimple "Content" $ flush cont
@@ -616,6 +628,19 @@ imageICML opts style attr (src, _) = do
                    , selfClosingTag "PathPointType" [("Anchor", hw<>" -"<>hh),
                        ("LeftDirection", hw<>" -"<>hh), ("RightDirection", hw<>" -"<>hh)]
                    ]
+
+      isdata = "data:" `Text.isPrefixOf` src' && "base64," `Text.isInfixOf` src'
+      contents =
+            if isdata
+               then -- see #8398
+                  inTags True "Contents" [] $
+                    literal ("<![CDATA[" <> Text.replace "%20" ""
+                            (Text.drop 1 (Text.dropWhile (/=',') src')) <> "]]>")
+               else mempty
+      link = if isdata
+                then mempty
+                else  selfClosingTag "Link" [("Self", "ueb"),
+                                             ("LinkResourceURI", src')]
       image  = inTags True "Image"
                    [("Self","ue6"), ("ItemTransform", scale<>" -"<>hw<>" -"<>hh)]
                  $ vcat [
@@ -624,8 +649,9 @@ imageICML opts style attr (src, _) = do
                        , selfClosingTag "GraphicBounds" [("Left","0"), ("Top","0")
                          , ("Right",  showFl $ ow*ow / imgWidth)
                          , ("Bottom", showFl $ oh*oh / imgHeight)]
+                       , contents
                        ]
-                   , selfClosingTag "Link" [("Self", "ueb"), ("LinkResourceURI", src')]
+                   , link
                    ]
       doc    = inTags True "CharacterStyleRange" attrs
                  $ inTags True "Rectangle" [("Self","uec"), ("StrokeWeight", "0"),

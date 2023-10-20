@@ -2,7 +2,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {- |
    Module      : Text.Pandoc.Readers.HTML.Types
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -33,12 +33,12 @@ import Text.Pandoc.Options (ReaderOptions)
 import Text.Pandoc.Parsing
   ( HasIdentifierList (..), HasLastStrPosition (..), HasLogMessages (..)
   , HasMacros (..), HasQuoteContext (..), HasReaderOptions (..)
-  , ParserT, ParserState, QuoteContext (NoQuote)
+  , ParsecT, ParserState, QuoteContext (NoQuote)
   )
-import Text.Pandoc.Readers.LaTeX.Types (Macro)
+import Text.Pandoc.TeX (Macro)
 
 -- | HTML parser type
-type HTMLParser m s = ParserT s HTMLState (ReaderT HTMLLocal m)
+type HTMLParser m s = ParsecT s HTMLState (ReaderT HTMLLocal m)
 
 -- | HTML parser, expecting @Tag Text@ as tokens.
 type TagParser m = HTMLParser m [Tag Text]
@@ -60,6 +60,7 @@ data HTMLLocal = HTMLLocal
   { quoteContext :: QuoteContext
   , inChapter    :: Bool -- ^ Set if in chapter section
   , inPlain      :: Bool -- ^ Set if in pPlain
+  , inListItem   :: Bool -- ^ Set if in <li> tag
   }
 
 
@@ -91,7 +92,7 @@ instance HasMeta HTMLState where
   deleteMeta s st = st {parserState = deleteMeta s $ parserState st}
 
 instance Default HTMLLocal where
-  def = HTMLLocal NoQuote False False
+  def = HTMLLocal NoQuote False False False
 
 instance HasLastStrPosition HTMLState where
   setLastStrPos s st = st {parserState = setLastStrPos s (parserState st)}

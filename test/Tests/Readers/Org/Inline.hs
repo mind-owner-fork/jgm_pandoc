@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Inline
-   Copyright   : © 2014-2022 Albert Krewinkel
+   Copyright   : © 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -104,8 +104,10 @@ tests =
       "[fn::Schreib mir eine E-Mail]" =?>
       para (note $ para "Schreib mir eine E-Mail")
 
-  , "Markup-chars not occurring on word break are symbols" =:
-      T.unlines [ "this+that+ +so+on"
+  , "By default, markup-chars not occurring on word break are symbols" =:
+      T.unlines [ "#+pandoc-emphasis-pre:"
+                , "#+pandoc-emphasis-post:"
+                , "this+that+ +so+on"
                 , "seven*eight* nine*"
                 , "+not+funny+"
                 ] =?>
@@ -118,12 +120,13 @@ tests =
       para (spcSep [ "//", "**", "__", "<>", "==", "~~", "$$" ])
 
   , "Adherence to Org's rules for markup borders" =:
-      "/t/& a/ / ./r/ (*l*) /e/! /b/." =?>
+      "/t/& a/ / ./r/ (*l*) /e/! ze\x200b/r/\x200bo /b/." =?>
       para (spcSep [ emph $ "t/&" <> space <> "a"
                    , "/"
                    , "./r/"
                    , "(" <> strong "l" <> ")"
                    , emph "e" <> "!"
+                   , "ze\x200b" <> emph "r" <> "\x200bo"
                    , emph "b" <> "."
                    ])
 
@@ -134,6 +137,10 @@ tests =
   , "Spaces are forbidden border chars" =:
       "/nada /" =?>
       para "/nada /"
+
+  , "Zero width spaces are forbidden border chars" =:
+      "/emph\x200b/asis" =?>
+      para "/emph\x200b/asis"
 
   , "Markup should work properly after a blank line" =:
     T.unlines ["foo", "", "/bar/"] =?>
@@ -186,7 +193,7 @@ tests =
                   , "3" <> subscript "{}"
                   , "4" <> superscript ("(a(" <> strong "b(c" <> ")d))")
                   ])
-  , "Verbatim text can contain equal signes (=)" =:
+  , "Verbatim text can contain equal signs (=)" =:
       "=is_subst = True=" =?>
       para (codeWith ("", ["verbatim"], []) "is_subst = True")
 
@@ -386,6 +393,11 @@ tests =
                 , "{{{HELLO()}}}"
                 ] =?>
       para "Foo Bar"
+  , "Macro called with an escaped comma" =:
+      T.unlines [ "#+MACRO: HELLO Foo $1"
+                , "{{{HELLO(moin\\, niom)}}}"
+                ] =?>
+      para "Foo moin, niom"
 
   , testGroup "Citations" Citation.tests
   , testGroup "Footnotes" Note.tests

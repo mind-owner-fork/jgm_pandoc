@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Readers.HTML.TagCategories
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -28,7 +28,7 @@ eitherBlockOrInline :: Set Text
 eitherBlockOrInline = fromList
   ["audio", "applet", "button", "iframe", "embed",
    "del", "ins", "progress", "map", "area", "noscript", "script",
-   "object", "svg", "video", "source"]
+   "object", "svg", "video", "source", "track"]
 
 blockHtmlTags :: Set Text
 blockHtmlTags = fromList

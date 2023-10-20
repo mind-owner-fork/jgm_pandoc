@@ -40,7 +40,8 @@ import Text.Pandoc.Extensions (Extension (Ext_raw_html), enableExtension)
 import Text.Pandoc.MIME (MimeType)
 import Text.Pandoc.Options (ReaderOptions (..))
 import Text.Pandoc.Readers.HTML (readHtml)
-import Text.Pandoc.Shared (addMetaField, collapseFilePath, escapeURI, tshow)
+import Text.Pandoc.Shared (addMetaField, collapseFilePath, tshow)
+import Text.Pandoc.URI (escapeURI)
 import qualified Text.Pandoc.UTF8 as UTF8 (toTextLazy)
 import Text.Pandoc.Walk (query, walk)
 import Text.Pandoc.XML.Light
@@ -50,7 +51,8 @@ type Items = M.Map Text (FilePath, MimeType)
 readEPUB :: PandocMonad m => ReaderOptions -> BL.ByteString -> m Pandoc
 readEPUB opts bytes = case toArchiveOrFail bytes of
   Right archive -> archiveToEPUB opts archive
-  Left  _       -> throwError $ PandocParseError "Couldn't extract ePub file"
+  Left  e       -> throwError $ PandocParseError $
+                     "Couldn't extract ePub file: " <> T.pack e
 
 -- runEPUB :: Except PandocError a -> Either PandocError a
 -- runEPUB = runExcept

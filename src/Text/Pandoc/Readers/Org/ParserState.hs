@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.ParserState
-   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -56,7 +56,7 @@ import Text.Pandoc.Parsing (Future, HasIdentifierList (..),
                             HasQuoteContext (..), HasReaderOptions (..),
                             ParserContext (..), QuoteContext (..), SourcePos,
                             askF, asksF, returnF, runF, trimInlinesF)
-import Text.Pandoc.Readers.LaTeX.Types (Macro)
+import Text.Pandoc.TeX (Macro)
 
 -- | This is used to delay evaluation until all relevant information has been
 -- parsed and made available in the parser state.
@@ -164,8 +164,8 @@ instance Default OrgParserState where
 defaultOrgParserState :: OrgParserState
 defaultOrgParserState = OrgParserState
   { orgStateAnchorIds = []
-  , orgStateEmphasisPreChars = "-\t ('\"{"
-  , orgStateEmphasisPostChars  = "-\t\n .,:!?;'\")}["
+  , orgStateEmphasisPreChars = "-\t ('\"{\x200B"
+  , orgStateEmphasisPostChars  = "-\t\n .,:!?;'\")}[\x200B"
   , orgStateEmphasisCharStack = []
   , orgStateEmphasisNewlines = Nothing
   , orgStateExportSettings = def

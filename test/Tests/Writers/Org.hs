@@ -3,13 +3,14 @@ module Tests.Writers.Org (tests) where
 
 import Data.Text as T
 import Test.Tasty
+import Test.Tasty.HUnit (HasCallStack)
 import Tests.Helpers
 import Text.Pandoc
 import Text.Pandoc.Arbitrary ()
 import Text.Pandoc.Builder
 
 infix 4 =:
-(=:) :: (ToString a, ToPandoc a)
+(=:) :: (ToString a, ToPandoc a, HasCallStack)
      => String -> (a, Text) -> TestTree
 (=:) = test org
 
@@ -64,5 +65,25 @@ tests =
           [ "- ☐ a"
           , "- ☒ b"
           ]
+    ]
+
+  , testGroup "code blocks"
+    [ "identifier"
+      =: codeBlockWith ("abc", ["python"], []) "return True"
+      =?> T.unlines
+      [ "#+name: abc"
+      , "#+begin_src python"
+      , "return True"
+      , "#+end_src"
+      ]
+
+    , "attributes"
+      =: codeBlockWith ("", ["python"], [("cache", "yes"), ("noweb", "yes")])
+                       "'Hello'"
+      =?> T.unlines
+      [ "#+begin_src python :cache yes :noweb yes"
+      , "'Hello'"
+      , "#+end_src"
+      ]
     ]
   ]

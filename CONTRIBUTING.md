@@ -213,9 +213,10 @@ Please follow these guidelines:
 9.  It is better not to introduce new dependencies.  Dependencies on
     external C libraries should especially be avoided.
 
-10. We aim for compatibility with ghc versions from 8.0 to the
-    latest release.  All pull requests and commits are tested
-    automatically on GitHub Actions.
+10. We aim for compatibility with at least the last three
+    released ghc versions, and sometimes more. Currently pandoc
+    can be compiled on ghc 8.6 an higher. All pull requests and
+    commits are tested automatically on GitHub Actions.
 
 Tests
 -----
@@ -354,23 +355,6 @@ With stack:
     stack install --profile
     pandoc +RTS -p -RTS [file]...
     less pandoc.prof
-
-Templates
----------
-
-The default templates live in `data/templates`, which is a git
-subtree linked to <https://github.com/jgm/pandoc-templates.git>.
-The purpose of maintaining a separate repository is to allow
-people to maintain variant templates as a fork.
-
-You can modify the templates and submit patches without worrying
-much about this: when these patches are merged, we will
-push them to the main templates repository by doing
-
-    git subtree push --prefix=data/templates templates master
-
-where `templates` is a remote pointing to the templates
-repository.
 
 The code
 --------

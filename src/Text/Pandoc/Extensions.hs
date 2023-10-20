@@ -1,12 +1,10 @@
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {- |
    Module      : Text.Pandoc.Extensions
-   Copyright   : Copyright (C) 2012-2022 John MacFarlane
+   Copyright   : Copyright (C) 2012-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -16,13 +14,16 @@
 Data structures and functions for representing markup extensions.
 -}
 module Text.Pandoc.Extensions ( Extension(..)
+                              , readExtension
+                              , showExtension
                               , Extensions
                               , emptyExtensions
                               , extensionsFromList
-                              , parseFormatSpec
+                              , extensionsToList
                               , extensionEnabled
                               , enableExtension
                               , disableExtension
+                              , disableExtensions
                               , getDefaultExtensions
                               , getAllExtensions
                               , pandocExtensions
@@ -32,16 +33,14 @@ module Text.Pandoc.Extensions ( Extension(..)
                               , githubMarkdownExtensions
                               , multimarkdownExtensions )
 where
-import Data.Bits (clearBit, setBit, testBit, (.|.))
 import Data.Data (Data)
-import Data.List (foldl')
 import qualified Data.Text as T
 import Data.Typeable (Typeable)
 import GHC.Generics (Generic)
-import Safe (readMay)
-import Text.Parsec
-import Data.Aeson.TH (deriveJSON)
+import Text.Read (readMaybe)
 import Data.Aeson
+import Data.List (sort)
+import qualified Data.Set as Set
 
 -- | Individually selectable syntax extensions.
 data Extension =
@@ -97,6 +96,7 @@ data Extension =
     | Ext_link_attributes         -- ^ link and image attributes
     | Ext_lists_without_preceding_blankline -- ^ Allow lists without preceding blank
     | Ext_literate_haskell    -- ^ Enable literate Haskell conventions
+    | Ext_mark                -- ^ Enable ==mark== syntax to highlight text
     | Ext_markdown_attribute      -- ^ Interpret text inside HTML as markdown iff
                                   --   container has attribute 'markdown'
     | Ext_markdown_in_html_blocks -- ^ Interpret as markdown inside HTML blocks
@@ -129,49 +129,83 @@ data Extension =
     | Ext_subscript           -- ^ Subscript using ~this~ syntax
     | Ext_superscript         -- ^ Superscript using ^this^ syntax
     | Ext_styles              -- ^ Read styles that pandoc doesn't know
+    | Ext_tagging             -- ^ Output optimized for PDF tagging
     | Ext_task_lists          -- ^ Parse certain list items as task list items
     | Ext_table_captions      -- ^ Pandoc-style table captions
     | Ext_tex_math_dollars    -- ^ TeX math between $..$ or $$..$$
     | Ext_tex_math_double_backslash  -- ^ TeX math btw \\(..\\) \\[..\\]
     | Ext_tex_math_single_backslash  -- ^ TeX math btw \(..\) \[..\]
+    | Ext_wikilinks_title_after_pipe -- ^ Support wikilinks of style
+                                     -- [[target|title]]
+    | Ext_wikilinks_title_before_pipe  -- ^ Support wikilinks of style
+                                       -- [[title|target]]
     | Ext_xrefs_name          -- ^ Use xrefs with names
     | Ext_xrefs_number        -- ^ Use xrefs with numbers
     | Ext_yaml_metadata_block -- ^ YAML metadata block
-    deriving (Show, Read, Enum, Eq, Ord, Bounded, Data, Typeable, Generic)
+    | CustomExtension T.Text  -- ^ Custom extension
+    deriving (Show, Read, Eq, Ord, Data, Typeable, Generic)
 
-$(deriveJSON defaultOptions{ constructorTagModifier = drop 4 } ''Extension)
+instance FromJSON Extension where
+  parseJSON = withText "Extension" (pure . readExtension . T.unpack)
 
-newtype Extensions = Extensions Integer
+instance ToJSON Extension where
+ toJSON = String . showExtension
+
+newtype Extensions = Extensions (Set.Set Extension)
   deriving (Show, Read, Eq, Ord, Data, Typeable, Generic)
 
 instance Semigroup Extensions where
-  (Extensions a) <> (Extensions b) = Extensions (a .|. b)
+  (Extensions a) <> (Extensions b) = Extensions (a <> b)
 instance Monoid Extensions where
-  mempty = Extensions 0
+  mempty = Extensions mempty
   mappend = (<>)
 
 instance FromJSON Extensions where
-  parseJSON =
-    return . foldr enableExtension emptyExtensions . fromJSON
+  parseJSON = fmap extensionsFromList . parseJSON
 
 instance ToJSON Extensions where
-  toJSON exts = toJSON $
-    [ext | ext <- [minBound..maxBound], extensionEnabled ext exts]
+  toJSON (Extensions exts) = toJSON exts
+
+-- | Reads a single extension from a string.
+readExtension :: String -> Extension
+readExtension "lhs" = Ext_literate_haskell
+readExtension name =
+  case readMaybe ("Ext_" ++ name) of
+    Just ext -> ext
+    Nothing -> CustomExtension (T.pack name)
+
+-- | Show an extension in human-readable form.
+showExtension :: Extension -> T.Text
+showExtension ext =
+  case ext of
+    CustomExtension t -> t
+    _ -> T.drop 4 $ T.pack $ show ext
 
 extensionsFromList :: [Extension] -> Extensions
-extensionsFromList = foldr enableExtension emptyExtensions
+extensionsFromList = Extensions . Set.fromList
+
+extensionsToList :: Extensions -> [Extension]
+extensionsToList (Extensions extset) = sort $ Set.toList extset
 
 emptyExtensions :: Extensions
-emptyExtensions = Extensions 0
+emptyExtensions = Extensions mempty
 
 extensionEnabled :: Extension -> Extensions -> Bool
-extensionEnabled x (Extensions exts) = testBit exts (fromEnum x)
+extensionEnabled x (Extensions exts) = x `Set.member` exts
 
 enableExtension :: Extension -> Extensions -> Extensions
-enableExtension x (Extensions exts) = Extensions (setBit exts (fromEnum x))
+enableExtension x (Extensions exts) = Extensions (Set.insert x exts)
 
 disableExtension :: Extension -> Extensions -> Extensions
-disableExtension x (Extensions exts) = Extensions (clearBit exts (fromEnum x))
+disableExtension x (Extensions exts) = Extensions (Set.delete x exts)
+
+-- | Removes the extensions in the second set from those in the first.
+disableExtensions :: Extensions  -- ^ base set
+                  -> Extensions  -- ^ extensions to remove
+                  -> Extensions
+disableExtensions (Extensions base) (Extensions remove) = Extensions $
+  -- keep only those extensions that are in `base` but not in `remove`.
+  base `Set.difference` remove
 
 -- | Extensions to be used with pandoc-flavored markdown.
 pandocExtensions :: Extensions
@@ -265,7 +299,6 @@ githubMarkdownExtensions :: Extensions
 githubMarkdownExtensions = extensionsFromList
   [ Ext_pipe_tables
   , Ext_raw_html
-  , Ext_native_divs
   , Ext_auto_identifiers
   , Ext_gfm_auto_identifiers
   , Ext_autolink_bare_uris
@@ -356,7 +389,6 @@ getDefaultExtensions "plain"           = plainExtensions
 getDefaultExtensions "gfm"             = extensionsFromList
   [ Ext_pipe_tables
   , Ext_raw_html
-  , Ext_native_divs
   , Ext_auto_identifiers
   , Ext_gfm_auto_identifiers
   , Ext_autolink_bare_uris
@@ -365,6 +397,7 @@ getDefaultExtensions "gfm"             = extensionsFromList
   , Ext_emoji
   , Ext_yaml_metadata_block
   , Ext_footnotes
+  , Ext_tex_math_dollars
   ]
 getDefaultExtensions "commonmark"      = extensionsFromList
                                           [Ext_raw_html]
@@ -375,9 +408,6 @@ getDefaultExtensions "commonmark_x"    = extensionsFromList
   , Ext_strikeout
   , Ext_task_lists
   , Ext_emoji
-  , Ext_pipe_tables
-  , Ext_raw_html
-  , Ext_raw_tex            -- only supported in writer (for math)
   , Ext_smart
   , Ext_tex_math_dollars
   , Ext_superscript
@@ -434,6 +464,7 @@ getDefaultExtensions "jats_articleauthoring" = getDefaultExtensions "jats"
 getDefaultExtensions "opml"            = pandocExtensions -- affects notes
 getDefaultExtensions "markua"          = extensionsFromList
                                           []
+getDefaultExtensions "typst"           = extensionsFromList [Ext_citations]
 getDefaultExtensions _                 = extensionsFromList
                                           [Ext_auto_identifiers]
 
@@ -468,6 +499,7 @@ getAllExtensions f = universalExtensions <> getAll f
        , Ext_mmd_title_block
        , Ext_abbreviations
        , Ext_autolink_bare_uris
+       , Ext_mark
        , Ext_mmd_link_attributes
        , Ext_mmd_header_identifiers
        , Ext_compact_definition_lists
@@ -476,6 +508,8 @@ getAllExtensions f = universalExtensions <> getAll f
        , Ext_literate_haskell
        , Ext_short_subsuperscripts
        , Ext_rebase_relative_paths
+       , Ext_wikilinks_title_after_pipe
+       , Ext_wikilinks_title_before_pipe
        ]
   getAll "markdown_strict"   = allMarkdownExtensions
   getAll "markdown_phpextra" = allMarkdownExtensions
@@ -513,7 +547,6 @@ getAllExtensions f = universalExtensions <> getAll f
     , Ext_task_lists
     , Ext_emoji
     , Ext_raw_html
-    , Ext_raw_tex            -- only supported in writer (for math)
     , Ext_implicit_figures
     , Ext_hard_line_breaks
     , Ext_smart
@@ -529,6 +562,8 @@ getAllExtensions f = universalExtensions <> getAll f
     , Ext_implicit_header_references
     , Ext_attributes
     , Ext_sourcepos
+    , Ext_wikilinks_title_after_pipe
+    , Ext_wikilinks_title_before_pipe
     , Ext_yaml_metadata_block
     , Ext_rebase_relative_paths
     ]
@@ -575,6 +610,7 @@ getAllExtensions f = universalExtensions <> getAll f
     [ Ext_smart
     , Ext_raw_tex
     , Ext_ntb
+    , Ext_tagging
     ]
   getAll "textile"         = autoIdExtensions <>
     extensionsFromList
@@ -595,7 +631,9 @@ getAllExtensions f = universalExtensions <> getAll f
     extensionsFromList
     [ Ext_smart ]
   getAll "vimwiki"         = autoIdExtensions
-  getAll "dokuwiki"        = autoIdExtensions
+  getAll "dokuwiki"        = autoIdExtensions <>
+    extensionsFromList
+    [ Ext_tex_math_dollars ]
   getAll "tikiwiki"        = autoIdExtensions
   getAll "rst"             = autoIdExtensions <>
     extensionsFromList
@@ -605,31 +643,5 @@ getAllExtensions f = universalExtensions <> getAll f
   getAll "mediawiki"       = autoIdExtensions <>
     extensionsFromList
     [ Ext_smart ]
+  getAll "typst"           = extensionsFromList [Ext_citations]
   getAll _                 = mempty
-
-
--- | Parse a format-specifying string into a markup format,
--- a set of extensions to enable, and a set of extensions to disable.
-parseFormatSpec :: T.Text
-                -> Either ParseError (T.Text, [Extension], [Extension])
-parseFormatSpec = parse formatSpec ""
-  where formatSpec = do
-          name <- formatName
-          (extsToEnable, extsToDisable) <- foldl' (flip ($)) ([],[]) <$>
-                                             many extMod
-          return (T.pack name, reverse extsToEnable, reverse extsToDisable)
-        formatName = many1 $ noneOf "-+"
-        extMod = do
-          polarity <- oneOf "-+"
-          name <- many $ noneOf "-+"
-          ext <- case readMay ("Ext_" ++ name) of
-                       Just n  -> return n
-                       Nothing
-                         | name == "lhs" -> return Ext_literate_haskell
-                         | otherwise -> unexpected $
-                                          "unknown extension: " ++ name
-          return $ \(extsToEnable, extsToDisable) ->
-                    case polarity of
-                        '+' -> (ext : extsToEnable, extsToDisable)
-                        _   -> (extsToEnable, ext : extsToDisable)
-

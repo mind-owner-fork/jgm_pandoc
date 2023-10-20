@@ -5,7 +5,7 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {- |
    Module      : Text.Pandoc.PDF
-   Copyright   : Copyright (C) 2012-2022 John MacFarlane
+   Copyright   : Copyright (C) 2012-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -52,13 +52,16 @@ import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Pandoc.Walk (walkM)
 import Text.Pandoc.Writers.Shared (getField, metaToContext)
 import Control.Monad.Catch (MonadMask)
+import Data.Digest.Pure.SHA (sha1, showDigest)
 #ifdef _WINDOWS
 import Data.List (intercalate)
 #endif
 import Data.List (isPrefixOf, find)
 import Text.Pandoc.Class (fillMediaBag, getVerbosity,
+                          readFileLazy, readFileStrict, fileExists,
                           report, extractMedia, PandocMonad)
 import Text.Pandoc.Logging
+import Text.DocTemplates ( FromContext(lookupContext) )
 
 #ifdef _WINDOWS
 changePathSeparators :: FilePath -> FilePath
@@ -82,13 +85,31 @@ makePDF program pdfargs writer opts doc =
   case takeBaseName program of
     "wkhtmltopdf" -> makeWithWkhtmltopdf program pdfargs writer opts doc
     prog | prog `elem` ["pagedjs-cli" ,"weasyprint", "prince"] -> do
+      let mkOutArgs f =
+            if program `elem` ["pagedjs-cli", "prince"]
+               then ["-o", f]
+               else [f]
       source <- writer opts doc
       verbosity <- getVerbosity
-      liftIO $ html2pdf verbosity program pdfargs source
+      liftIO $ toPdfViaTempFile verbosity program pdfargs mkOutArgs source
+    "typst" -> do
+      source <- writer opts doc
+      verbosity <- getVerbosity
+      liftIO $
+        toPdfViaTempFile verbosity program ("compile":pdfargs) (:[]) source
     "pdfroff" -> do
       source <- writer opts doc
+      let paperargs =
+            case lookupContext "papersize" (writerVariables opts) of
+              Just s
+                | T.takeEnd 1 s == "l" -> ["-P-p" <>
+                                           T.unpack (T.dropEnd 1 s), "-P-l"]
+                | otherwise -> ["-P-p" <> T.unpack s]
+              Nothing -> []
       let args   = ["-ms", "-mpdfmark", "-mspdf",
-                    "-e", "-t", "-k", "-KUTF-8", "-i"] ++ pdfargs
+                    "-e", "-t", "-k", "-KUTF-8", "-i"] ++
+                   ["-U" | ".PDFPIC" `T.isInfixOf` source] ++
+                    paperargs ++ pdfargs
       generic2pdf program args source
     baseProg -> do
       withTempDir "tex2pdf." $ \tmpdir' -> do
@@ -163,7 +184,7 @@ makeWithWkhtmltopdf program pdfargs writer opts doc@(Pandoc meta _) = do
                  -- see #6474
   source <- writer opts doc
   verbosity <- getVerbosity
-  liftIO $ html2pdf verbosity program args source
+  liftIO $ toPdfViaTempFile verbosity program args (:[]) source
 
 handleImages :: (PandocMonad m, MonadIO m)
              => WriterOptions
@@ -215,8 +236,9 @@ convertImage opts tmpdir fname = do
                  E.catch (Right pngOut <$ JP.savePngImage pngOut img) $
                      \(e :: E.SomeException) -> return (Left (tshow e))
   where
-    pngOut = normalise $ replaceDirectory (replaceExtension fname ".png") tmpdir
-    pdfOut = normalise $ replaceDirectory (replaceExtension fname ".pdf") tmpdir
+    sha = showDigest (sha1 (UTF8.fromStringLazy fname))
+    pngOut = normalise $ tmpdir </> sha <.> "png"
+    pdfOut = normalise $ tmpdir </> sha <.> "pdf"
     svgIn = normalise fname
     mime = getMimeType fname
     doNothing = return (Right fname)
@@ -333,21 +355,21 @@ getResultingPDF :: (PandocMonad m, MonadIO m)
                 => Maybe String -> String
                 -> m (Maybe ByteString, Maybe ByteString)
 getResultingPDF logFile pdfFile = do
-    pdfExists <- liftIO $ doesFileExist pdfFile
+    pdfExists <- fileExists pdfFile
     pdf <- if pdfExists
               -- We read PDF as a strict bytestring to make sure that the
               -- temp directory is removed on Windows.
               -- See https://github.com/jgm/pandoc/issues/1192.
               then (Just . BL.fromChunks . (:[])) `fmap`
-                   liftIO (BS.readFile pdfFile)
+                   (readFileStrict pdfFile)
               else return Nothing
     -- Note that some things like Missing character warnings
     -- appear in the log but not on stderr, so we prefer the log:
     log' <- case logFile of
               Just logFile' -> do
-                logExists <- liftIO $ doesFileExist logFile'
+                logExists <- fileExists logFile'
                 if logExists
-                  then liftIO $ Just <$> BL.readFile logFile'
+                  then Just <$> readFileLazy logFile'
                   else return Nothing
               Nothing -> return Nothing
     return (log', pdf)
@@ -420,24 +442,20 @@ generic2pdf program args source = do
              ExitFailure _ -> Left out
              ExitSuccess   -> Right out
 
-
-html2pdf  :: Verbosity    -- ^ Verbosity level
-          -> String       -- ^ Program (wkhtmltopdf, weasyprint, prince, or path)
+toPdfViaTempFile  ::
+             Verbosity    -- ^ Verbosity level
+          -> String       -- ^ Program (program name or path)
           -> [String]     -- ^ Args to program
-          -> Text         -- ^ HTML5 source
+          -> (String -> [String]) -- ^ Construct args for output file
+          -> Text         -- ^ Source
           -> IO (Either ByteString ByteString)
-html2pdf verbosity program args source =
-  -- write HTML to temp file so we don't have to rewrite
-  -- all links in `a`, `img`, `style`, `script`, etc. tags,
-  -- and piping to weasyprint didn't work on Windows either.
-  withTempFile "." "html2pdf.html" $ \file h1 ->
-    withTempFile "." "html2pdf.pdf" $ \pdfFile h2 -> do
+toPdfViaTempFile verbosity program args mkOutArgs source =
+  withTempFile "." "toPdfViaTempFile.html" $ \file h1 ->
+    withTempFile "." "toPdfViaTempFile.pdf" $ \pdfFile h2 -> do
       hClose h1
       hClose h2
       BS.writeFile file $ UTF8.fromText source
-      let pdfFileArgName = ["-o" | takeBaseName program `elem`
-                                   ["pagedjs-cli", "prince"]]
-      let programArgs = args ++ [file] ++ pdfFileArgName ++ [pdfFile]
+      let programArgs = args ++ [file] ++ mkOutArgs pdfFile
       env' <- getEnvironment
       when (verbosity >= INFO) $
         UTF8.readFile file >>=

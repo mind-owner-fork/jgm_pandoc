@@ -6,6 +6,7 @@ author: John MacFarlane
 The following Haskell libraries have been developed to support
 pandoc:
 
+
 [skylighting-core] and [skylighting]
 :   Syntax highlighting engine supporting over 140 languages.
 
@@ -45,6 +46,23 @@ pandoc:
 [jira-wiki-markup]
 :   Support for parsing Jira wiki syntax.
 
+[gridtables]
+:   Support for parsing grid style textual tables.
+
+[hslua-objectorientation], [hslua-packaging]
+:   Bindings, wrappers, and helper functions to access Haskell data
+    types from Lua via an object-oriented interface.
+
+[hslua-module-path], [-system], [-text], and [-version]
+:   Lua modules that expose functionality of basic Haskell
+    libraries to Lua.
+
+[hslua-aeson]
+:   Converter from aeson data types to Lua objects.
+
+[hslua-cli]
+:   Command-line interface mimicking the default `lua` executable.
+
 [skylighting]: https://hackage.haskell.org/package/skylighting
 [skylighting-core]: https://hackage.haskell.org/package/skylighting-core
 [citeproc]: https://hackage.haskell.org/package/citeproc
@@ -60,4 +78,12 @@ pandoc:
 [emojis]: https://hackage.haskell.org/package/emojis
 [jira-wiki-markup]: https://hackage.haskell.org/package/jira-wiki-markup
 [unicode-collation]: https://hackage.haskell.org/package/unicode-collation
-
+[gridtables]: https://hackage.haskell.org/package/gridtables
+[hslua-objectorientation]: https://hackage.haskell.org/package/hslua-objectorientation
+[hslua-packaging]: https://hackage.haskell.org/package/hslua-packaging
+[hslua-aeson]: https://hackage.haskell.org/package/hslua-aeson
+[hslua-cli]: https://hackage.haskell.org/package/hslua-cli
+[hslua-module-path]: https://hackage.haskell.org/package/hslua-module-path
+[-system]: https://hackage.haskell.org/package/hslua-module-system
+[-text]: https://hackage.haskell.org/package/hslua-module-text
+[-version]: https://hackage.haskell.org/package/hslua-module-version

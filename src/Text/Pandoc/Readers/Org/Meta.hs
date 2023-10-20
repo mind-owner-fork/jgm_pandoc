@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Meta
-   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -27,7 +27,7 @@ import qualified Text.Pandoc.Builder as B
 import Text.Pandoc.Class.PandocMonad (PandocMonad)
 import Text.Pandoc.Definition
 import Text.Pandoc.Shared (blocksToInlines, safeRead)
-import Text.Pandoc.Network.HTTP (urlEncode)
+import Text.Pandoc.URI (urlEncode)
 
 import Control.Monad (mzero, void)
 import Data.List (intercalate, intersperse)
@@ -78,6 +78,7 @@ a ~~> b = (a, b)
 keywordHandlers :: PandocMonad m => Map Text (OrgParser m ())
 keywordHandlers = Map.fromList
   [ "author" ~~> lineOfInlines `parseThen` collectLines "author"
+  , "bibliography" ~~> fmap pure anyLine `parseThen` collectAsList "bibliography"
   , "creator" ~~> fmap pure anyLine `parseThen` B.setMeta "creator"
   , "date" ~~> lineOfInlines `parseThen` B.setMeta "date"
   , "description" ~~> lineOfInlines `parseThen` collectLines "description"
@@ -156,7 +157,7 @@ collectLines key value meta =
     MetaBool _bool    -> []
 
 -- | Accumulate the result as a MetaList under the given key.
-collectAsList :: Text -> Inlines -> Meta -> Meta
+collectAsList :: B.ToMetaValue a => Text -> a -> Meta -> Meta
 collectAsList key value meta =
   let value' = metaListAppend meta (B.toMetaValue value)
   in B.setMeta key value' meta
@@ -216,7 +217,7 @@ setSelectedTags tags st =
 
 setEmphasisPreChar :: Maybe [Char] -> OrgParserState -> OrgParserState
 setEmphasisPreChar csMb st =
-  let preChars = fromMaybe (orgStateEmphasisPostChars defaultOrgParserState) csMb
+  let preChars = fromMaybe (orgStateEmphasisPreChars defaultOrgParserState) csMb
   in st { orgStateEmphasisPreChars = preChars }
 
 setEmphasisPostChar :: Maybe [Char] -> OrgParserState -> OrgParserState

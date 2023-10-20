@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Directive
-   Copyright   : © 2014-2022 Albert Krewinkel
+   Copyright   : © 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -250,7 +250,7 @@ tests =
                     , "\\end{equation}"
                     ] =?>
           para (str "\\begin{equation}" <> softbreak <>
-                str "f(x) = x^2" <> softbreak <>
+                text "f(x) = x^2" <> softbreak <>
                 str "\\end{equation}")
         ]
       ]

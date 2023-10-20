@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Templates
-   Copyright   : Copyright (C) 2009-2022 John MacFarlane
+   Copyright   : Copyright (C) 2009-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -12,6 +12,22 @@
    Portability : portable
 
 Utility functions for working with pandoc templates.
+
+'WithDefaultPartials' and 'WithPartials' are Monad wrappers. Wrapping
+these around an instance of 'PandocMonad' gives different instances of
+'TemplateMonad', with different search behaviors when retrieving
+partials.
+
+To compile a template and limit partial search to pandoc’s data files,
+use @runWithDefaultPartials (compileTemplate ...)@.
+
+To compile a template and allow partials to be found locally (either on
+the file system or via HTTP, in the event that the main template has an
+absolute URL), ue @runWithPartials (compileTemplate ...)@.
+
+'getTemplate' seeks a template locally, or via HTTP if the template has
+an absolute URL, falling back to the data files if not found.
+
 -}
 
 module Text.Pandoc.Templates ( Template
@@ -27,9 +43,10 @@ module Text.Pandoc.Templates ( Template
 import System.FilePath ((<.>), (</>), takeFileName)
 import Text.DocTemplates (Template, TemplateMonad(..), compileTemplate, renderTemplate)
 import Text.Pandoc.Class.CommonState (CommonState(..))
-import Text.Pandoc.Class.PandocMonad (PandocMonad, readDataFile, fetchItem,
-                                      getCommonState, modifyCommonState)
-import qualified Text.Pandoc.UTF8 as UTF8
+import Text.Pandoc.Class.PandocMonad (PandocMonad, fetchItem,
+                                      getCommonState, modifyCommonState,
+                                      toTextM)
+import Text.Pandoc.Data (readDataFile)
 import Control.Monad.Except (catchError, throwError)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -49,14 +66,14 @@ newtype WithPartials m a = WithPartials { runWithPartials :: m a }
 
 instance PandocMonad m => TemplateMonad (WithDefaultPartials m) where
   getPartial fp = WithDefaultPartials $
-    UTF8.toText <$> readDataFile ("templates" </> takeFileName fp)
+    readDataFile ("templates" </> takeFileName fp) >>= toTextM fp
 
 instance PandocMonad m => TemplateMonad (WithPartials m) where
   getPartial fp = WithPartials $ getTemplate fp
 
 -- | Retrieve text for a template.
 getTemplate :: PandocMonad m => FilePath -> m Text
-getTemplate tp = UTF8.toText <$>
+getTemplate tp =
   ((do surl <- stSourceURL <$> getCommonState
        -- we don't want to look for templates remotely
        -- unless the full URL is specified:
@@ -74,14 +91,13 @@ getTemplate tp = UTF8.toText <$>
              PandocIOError _ ioe | isDoesNotExistError ioe ->
                 -- see #5987 on reason for takeFileName
                 readDataFile ("templates" </> takeFileName tp)
-             _ -> throwError e))
+             _ -> throwError e)) >>= toTextM tp
 
 -- | Get default template for the specified writer.
 getDefaultTemplate :: PandocMonad m
                    => Text           -- ^ Name of writer
                    -> m Text
-getDefaultTemplate writer = do
-  let format = T.takeWhile (`notElem` ("+-" :: String)) writer  -- strip off extensions
+getDefaultTemplate format = do
   case format of
        "native"  -> return ""
        "csljson" -> return ""
@@ -90,6 +106,8 @@ getDefaultTemplate writer = do
        "fb2"     -> return ""
        "pptx"    -> return ""
        "ipynb"   -> return ""
+       "asciidoctor" -> getDefaultTemplate "asciidoc"
+       "asciidoc_legacy" -> getDefaultTemplate "asciidoc"
        "odt"     -> getDefaultTemplate "opendocument"
        "html"    -> getDefaultTemplate "html5"
        "docbook" -> getDefaultTemplate "docbook5"
@@ -105,7 +123,7 @@ getDefaultTemplate writer = do
        "commonmark_x"      -> getDefaultTemplate "commonmark"
        _        -> do
          let fname = "templates" </> "default" <.> T.unpack format
-         UTF8.toText <$> readDataFile fname
+         readDataFile fname >>= toTextM fname
 
 -- | Get and compile default template for the specified writer.
 -- Raise an error on compilation failure.

@@ -43,7 +43,7 @@ module Text.Pandoc.Writers.Powerpoint.Presentation ( documentToPresentation
                                                    , LinkTarget(..)
                                                    ) where
 
-
+import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.List (intercalate)
@@ -537,7 +537,14 @@ blockToParagraphs (Div (_, classes, _) blks) = let
                    | otherwise -> Nothing
   addIncremental env = env { envInIncrementalDiv = incremental }
   in local addIncremental (concatMapM blockToParagraphs blks)
-blockToParagraphs blk = do
+blockToParagraphs (Figure attr capt blks) =
+  blockToParagraphs (Shared.figureDiv attr capt blks)
+blockToParagraphs hr@HorizontalRule = notRendered hr
+blockToParagraphs tbl@Table{} = notRendered tbl
+
+-- | Report that a block cannot be rendered.
+notRendered :: Block -> Pres [Paragraph]
+notRendered blk = do
   addLogMessage $ BlockNotRendered blk
   return []
 
@@ -592,6 +599,7 @@ blockToShape (Para (il:_))  | Link _ (il':_) target <- il
       withAttr attr .
       Pic def{picPropLink = Just $ ExternalTarget target} (T.unpack url) title
       <$> inlinesToParElems ils
+blockToShape (Figure _figattr _caption [b]) = blockToShape b
 blockToShape (Table _ blkCapt specs thead tbody tfoot) = do
   let (caption, algn, _, hdrCells, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption' <- inlinesToParElems caption
@@ -1041,9 +1049,9 @@ blockIsBlank
       DefinitionList ds -> all (uncurry (&&) . bimap (all inlineIsBlank) (all (all blockIsBlank))) ds
       Header _ _ ils -> all inlineIsBlank ils
       HorizontalRule -> True
+      Figure _ _ bls -> all blockIsBlank bls
       Table{} -> False
       Div _ bls -> all blockIsBlank bls
-      Null -> True
 
 textIsBlank :: T.Text -> Bool
 textIsBlank = T.all isSpace

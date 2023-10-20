@@ -7,7 +7,7 @@ where
 import Data.Functor (($>))
 import Text.Pandoc.Class
 import Text.Pandoc.Readers.LaTeX.Parsing
-import Text.Pandoc.Readers.LaTeX.Types
+import Text.Pandoc.TeX
 import Text.Pandoc.Builder as B
 import qualified Data.Map as M
 import Data.Text (Text)
@@ -40,17 +40,18 @@ tableEnvironments blocks inline =
 hline :: PandocMonad m => LP m ()
 hline = try $ do
   spaces
-  controlSeq "hline" <|>
-    (controlSeq "cline" <* braced) <|>
-    -- booktabs rules:
-    controlSeq "toprule" <|>
-    controlSeq "bottomrule" <|>
-    controlSeq "midrule" <|>
-    controlSeq "endhead" <|>
-    controlSeq "endfirsthead"
-  spaces
+  hasParenArg <-
+      (False <$ controlSeq "hline") <|>
+      (False <$ controlSeq "cline") <|>
+      (True <$ controlSeq "cmidrule") <|>
+      -- booktabs rules:
+      (True <$ controlSeq "toprule") <|>
+      (True <$ controlSeq "bottomrule") <|>
+      (True <$ controlSeq "midrule") <|>
+      (True <$ controlSeq "endhead") <|>
+      (True <$ controlSeq "endfirsthead")
   optional rawopt
-  return ()
+  when hasParenArg $ void $ optional (parenWrapped (() <$ singleChar))
 
 lbreak :: PandocMonad m => LP m Tok
 lbreak = (controlSeq "\\" <|> controlSeq "tabularnewline")
@@ -62,10 +63,11 @@ amp = symbol '&'
 -- Split a Word into individual Symbols (for parseAligns)
 splitWordTok :: PandocMonad m => LP m ()
 splitWordTok = do
-  inp <- getInput
+  TokStream macrosExpanded inp <- getInput
   case inp of
        (Tok spos Word t : rest) ->
-         setInput $ map (Tok spos Symbol . T.singleton) (T.unpack t) <> rest
+         setInput $ TokStream macrosExpanded
+                  $ map (Tok spos Symbol . T.singleton) (T.unpack t) <> rest
        _ -> return ()
 
 parseAligns :: PandocMonad m => LP m [(Alignment, ColWidth, ([Tok], [Tok]))]
@@ -104,12 +106,13 @@ parseAligns = try $ do
   let starAlign = do -- '*{2}{r}' == 'rr', we just expand like a macro
         symbol '*'
         spaces
-        ds <- trim . untokenize <$> braced
+        ds <- trim . untokenize <$> bracedOrToken
         spaces
-        spec <- braced
+        spec <- bracedOrToken
         case safeRead ds of
-             Just n  ->
-               getInput >>= setInput . (mconcat (replicate n spec) ++)
+             Just n  -> do
+               TokStream _ ts <- getInput
+               setInput $ TokStream False (mconcat (replicate n spec) ++ ts)
              Nothing -> Prelude.fail $ "Could not parse " <> T.unpack ds <> " as number"
   bgroup
   spaces
@@ -186,7 +189,7 @@ cellAlignment :: PandocMonad m => LP m Alignment
 cellAlignment = skipMany (symbol '|') *> alignment <* skipMany (symbol '|')
   where
     alignment = do
-      c <- untoken <$> singleChar
+      c <- untoken <$> singleChar <* optional braced -- ignore args
       return $ case c of
         "l" -> AlignLeft
         "r" -> AlignRight
@@ -352,18 +355,18 @@ addTableCaption :: PandocMonad m => Blocks -> LP m Blocks
 addTableCaption = walkM go
   where go (Table attr c spec th tb tf) = do
           st <- getState
+          let capt = fromMaybe c $ sCaption st
           let mblabel = sLastLabel st
-          capt <- case (sCaption st, mblabel) of
-                   (Just ils, Nothing)  -> return $ caption Nothing (plain ils)
-                   (Just ils, Just lab) -> do
+          case mblabel of
+            Nothing -> return ()
+            Just lab -> do
                      num <- getNextNumber sLastTableNum
                      setState
                        st{ sLastTableNum = num
                          , sLabels = M.insert lab
                                     [Str (renderDottedNum num)]
                                     (sLabels st) }
-                     return $ caption Nothing (plain ils) -- add number??
-                   (Nothing, _)  -> return c
+          -- add num to caption?
           let attr' = case (attr, mblabel) of
                         ((_,classes,kvs), Just ident) ->
                            (ident,classes,kvs)

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.LaTeX.Citation
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -171,8 +171,9 @@ citationsToBiblatex inlineListToLaTeX (c:cs)
       return $ text cmd <> mconcat groups
 
   where grouper prev cit = case prev of
-         ((CiteGroup oPfx oSfx ids):rest)
-             | null oSfx && null pfx -> CiteGroup oPfx sfx (cid:ids) : rest
+         ((CiteGroup oPfx [] ids):rest)
+             | null pfx && null sfx
+           -> CiteGroup oPfx sfx (cid:ids) : rest
          _ -> CiteGroup pfx sfx [cid] : prev
          where pfx = citationPrefix cit
                sfx = citationSuffix cit

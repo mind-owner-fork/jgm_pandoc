@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.JATS.References
-   Copyright   : © 2021-2022 Albert Krewinkel
+   Copyright   : © 2021-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb@zeitkraut.de>
@@ -37,7 +37,7 @@ referencesToJATS :: PandocMonad m
                  -> [Reference Inlines]
                  -> JATS m (Doc Text)
 referencesToJATS opts =
-  fmap (inTags True "ref-list" [] . vcat) . mapM (referenceToJATS opts)
+  fmap vcat . mapM (referenceToJATS opts)
 
 referenceToJATS :: PandocMonad m
                 => WriterOptions
@@ -65,15 +65,21 @@ referenceToJATS _opts ref = do
     , accessed
     , "volume"          `varInTag` "volume"
     , "issue"           `varInTag` "issue"
+    , "edition"         `varInTag` "edition"
     , "page-first"      `varInTag` "fpage"
-    , "page-last"       `varInTag` "lpage"
-    , "pages"           `varInTag` "page-range"
     , "ISBN"            `varInTag` "isbn"
     , "ISSN"            `varInTag` "issn"
     , "URL"             `varInTag` "uri"
     , varInTagWith "doi"  "pub-id" [("pub-id-type", "doi")]
     , varInTagWith "pmid" "pub-id" [("pub-id-type", "pmid")]
-    ]
+    ] ++
+    case lookupVariable "page" ref >>= valToText of
+      Nothing -> []
+      Just val ->
+        let isdash c = c == '-' || c == '\x2013'
+            (fpage, lpage) = T.dropWhile isdash <$> T.break isdash val
+         in [ inTags' "fpage" [] $ literal $ escapeStringForXML fpage,
+              inTags' "lpage" [] $ literal $ escapeStringForXML lpage ]
   where
     varInTag var tagName = varInTagWith var tagName []
 
@@ -141,11 +147,11 @@ fourDigits :: Int -> Text
 fourDigits n = T.takeEnd 4 $ "000" <> tshow n
 
 toNameElements :: Name -> Doc Text
-toNameElements name =
-  if not (isEmpty nameTags)
-  then inTags' "name" [] nameTags
-  else nameLiteral name `inNameTag` "string-name"
-    where
+toNameElements name
+  | not (isEmpty nameTags) = inTags' "name" [] nameTags
+  | nameLiteral name == Just "others" = "<etal/>"
+  | otherwise = nameLiteral name `inNameTag` "string-name"
+  where
       inNameTag mVal tag = case mVal of
         Nothing  -> empty
         Just val -> inTags' tag [] . literal $ escapeStringForXML val

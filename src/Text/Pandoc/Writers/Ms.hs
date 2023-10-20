@@ -2,7 +2,7 @@
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Ms
-   Copyright   : Copyright (C) 2007-2022 John MacFarlane
+   Copyright   : Copyright (C) 2007-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -21,6 +21,9 @@ TODO:
 
 module Text.Pandoc.Writers.Ms ( writeMs ) where
 import Control.Monad.State.Strict
+    ( gets, modify, evalStateT )
+import Control.Monad ( MonadPlus(mplus), liftM, unless, forM )
+import Data.Containers.ListUtils (nubOrd)
 import Data.Char (isAscii, isLower, isUpper, ord)
 import Data.List (intercalate, intersperse)
 import Data.List.NonEmpty (nonEmpty)
@@ -60,6 +63,7 @@ pandocToMs opts (Pandoc meta blocks) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
+  title <- chomp <$> inlineListToMs' opts (lookupMetaInlines "title" meta)
   metadata <- metaToContext opts
               (blockListToMs opts)
               (fmap chomp . inlineListToMs' opts)
@@ -76,11 +80,11 @@ pandocToMs opts (Pandoc meta blocks) = do
   let context = defField "body" main
               $ defField "has-inline-math" hasInlineMath
               $ defField "hyphenate" True
-              $ defField "pandoc-version" pandocVersion
               $ defField "toc" (writerTableOfContents opts)
               $ defField "title-meta" titleMeta
               $ defField "author-meta" (T.intercalate "; " authorsMeta)
-              $ defField "highlighting-macros" highlightingMacros metadata
+              $ defField "highlighting-macros" highlightingMacros
+              $ resetField "title" title metadata
   return $ render colwidth $
     case writerTemplate opts of
        Nothing  -> main
@@ -127,7 +131,6 @@ blockToMs :: PandocMonad m
           => WriterOptions -- ^ Options
           -> Block         -- ^ Block element
           -> MS m (Doc Text)
-blockToMs _ Null = return empty
 blockToMs opts (Div (ident,cls,kvs) bs) = do
   let anchor = if T.null ident
                   then empty
@@ -161,25 +164,6 @@ blockToMs opts (Div (ident,cls,kvs) bs) = do
        return $ anchor $$ res
 blockToMs opts (Plain inlines) =
   splitSentences <$> inlineListToMs' opts inlines
-blockToMs opts (Para [Image attr alt (src,_tit)])
-  | let ext = takeExtension (T.unpack src) in (ext == ".ps" || ext == ".eps") = do
-  let (mbW,mbH) = (inPoints opts <$> dimension Width attr,
-                   inPoints opts <$> dimension Height attr)
-  let sizeAttrs = case (mbW, mbH) of
-                       (Just wp, Nothing) -> space <> doubleQuotes
-                              (literal (tshow (floor wp :: Int) <> "p"))
-                       (Just wp, Just hp) -> space <> doubleQuotes
-                              (literal (tshow (floor wp :: Int) <> "p")) <>
-                              space <>
-                              doubleQuotes (literal (tshow (floor hp :: Int)))
-                       _ -> empty
-  capt <- splitSentences <$> inlineListToMs' opts alt
-  return $ nowrap (literal ".PSPIC -C " <>
-             doubleQuotes (literal (escapeStr opts src)) <>
-             sizeAttrs) $$
-           literal ".ce 1000" $$
-           capt $$
-           literal ".ce 0"
 blockToMs opts (Para inlines) = do
   firstPara <- gets stFirstPara
   resetFirstPara
@@ -301,7 +285,6 @@ blockToMs opts (Table _ blkCapt specs thead tbody tfoot) =
                then ""
                else ".nr LL \\n[LLold]") $$
            literal ".ad"
-
 blockToMs opts (BulletList items) = do
   contents <- mapM (bulletListItemToMs opts) items
   setFirstPara
@@ -317,6 +300,25 @@ blockToMs opts (DefinitionList items) = do
   contents <- mapM (definitionListItemToMs opts) items
   setFirstPara
   return (vcat contents)
+blockToMs opts (Figure figattr (Caption _ caption) body) =
+  case body of
+    [Plain [ Image attr _alt (src, _tit) ]] -> do
+       let ext = takeExtension (T.unpack src)
+       let sizeAttrs = getSizeAttrs opts attr
+       capt <- blockToMs opts (Div figattr caption)
+       let captlines = height capt
+       let cmd = case ext of
+                   ".ps" -> ".PSPIC"
+                   ".eps" -> ".PSPIC"
+                   ".pdf" -> ".PDFPIC"
+                   _ -> "\\\" .IMAGE"
+       return $ nowrap (literal cmd <+>
+                    doubleQuotes (literal (escapeStr opts src)) <>
+                    sizeAttrs) $$
+                  literal (".ce " <> tshow captlines) $$
+                  capt $$
+                  literal ".sp 1"
+    _ -> blockToMs opts $ Div figattr body
 
 -- | Convert bullet list item (list of blocks) to ms.
 bulletListItemToMs :: PandocMonad m => WriterOptions -> [Block] -> MS m (Doc Text)
@@ -454,7 +456,7 @@ inlineToMs opts (Math InlineMath str) = do
        Left il -> inlineToMs opts il
        Right r -> return $ literal "@" <> literal r <> literal "@"
 inlineToMs opts (Math DisplayMath str) = do
-  res <- convertMath writeEqn InlineMath str
+  res <- convertMath writeEqn DisplayMath str
   case res of
        Left il -> do
          contents <- inlineToMs opts il
@@ -488,10 +490,20 @@ inlineToMs opts (Link _ txt (src, _)) = do
        doubleQuotes (literal (escapeUri src)) <> literal " -A " <>
        doubleQuotes (literal "\\c") <> space <> literal "\\") <> cr <>
        literal " -- " <> doubleQuotes (nowrap contents) <> cr <> literal "\\&"
-inlineToMs opts (Image _ alternate (_, _)) =
-  return $ char '[' <> literal "IMAGE: " <>
-           literal (escapeStr opts (stringify alternate))
-             <> char ']'
+inlineToMs opts (Image attr alternate (src, _)) = do
+  let desc = literal "[IMAGE: " <>
+             literal (escapeStr opts (stringify alternate)) <> char ']'
+  let sizeAttrs = getSizeAttrs opts attr
+  let ext = takeExtension (T.unpack src)
+  let cmd = case ext of
+             ".ps" -> ".PSPIC"
+             ".eps" -> ".PSPIC"
+             ".pdf" -> ".PDFPIC"
+             _ -> ""
+  return $ cr <> nowrap
+    (if T.null cmd
+        then desc <> " \\\" " <> doubleQuotes (literal src) <> sizeAttrs
+        else literal cmd <+> doubleQuotes (literal src) <> sizeAttrs) <> cr
 inlineToMs _ (Note contents) = do
   modify $ \st -> st{ stNotes = contents : stNotes st }
   return $ literal "\\**"
@@ -567,7 +579,7 @@ styleToMs sty = vcat $ colordefs <> map (toMacro sty) alltoktypes
         colordefs = map toColorDef allcolors
         toColorDef c = literal (".defcolor " <>
             hexColor c <> " rgb #" <> hexColor c)
-        allcolors = catMaybes $ ordNub $
+        allcolors = catMaybes $ nubOrd $
           [defaultColor sty, backgroundColor sty,
            lineNumberColor sty, lineNumberBackgroundColor sty] <>
            concatMap (colorsForToken. snd) (Map.toList (tokenStyles sty))
@@ -578,7 +590,7 @@ hexColor (RGB r g b) = T.pack $ printf "%02x%02x%02x" r g b
 
 toMacro :: Style -> TokenType -> Doc Text
 toMacro sty toktype =
-  nowrap (literal ".ds " <> literal (tshow toktype) <> literal " " <>
+  nowrap (literal ".ds " <> literal (tshow toktype) <> literal " \\&" <>
             setbg <> setcolor <> setfont <>
             literal "\\\\$1" <>
             resetfont <> resetcolor <> resetbg)
@@ -629,3 +641,18 @@ toAscii = T.concatMap
               Nothing -> "_u" <> tshow (ord c) <> "_"
               Just '/' -> "_u" <> tshow (ord c) <> "_" -- see #4515
               Just c' -> T.singleton c')
+
+getSizeAttrs :: WriterOptions -> Attr -> Doc Text
+getSizeAttrs opts attr =
+  case (mbW, mbH) of
+     (Just wp, Nothing) -> space <> doubleQuotes
+            (literal (tshow (floor wp :: Int) <> "p"))
+     (Just wp, Just hp) -> space <> doubleQuotes
+            (literal (tshow (floor wp :: Int) <> "p"))
+            <> space <>
+            doubleQuotes
+             (literal (tshow (floor hp :: Int) <> "p"))
+     _ -> empty
+ where
+  mbW = inPoints opts <$> dimension Width attr
+  mbH = inPoints opts <$> dimension Height attr

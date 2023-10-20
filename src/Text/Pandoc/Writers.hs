@@ -1,10 +1,11 @@
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections       #-}
 {- |
    Module      : Text.Pandoc
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -19,16 +20,18 @@ module Text.Pandoc.Writers
       Writer(..)
     , writers
     , writeAsciiDoc
+    , writeAsciiDocLegacy
     , writeAsciiDoctor
     , writeBeamer
     , writeBibTeX
     , writeBibLaTeX
+    , writeChunkedHTML
     , writeCommonMark
     , writeConTeXt
     , writeCslJson
     , writeDZSlides
-    , writeDocbook4
-    , writeDocbook5
+    , writeDocBook4
+    , writeDocBook5
     , writeDocx
     , writeDokuWiki
     , writeEPUB2
@@ -70,29 +73,29 @@ module Text.Pandoc.Writers
     , writeTEI
     , writeTexinfo
     , writeTextile
+    , writeTypst
     , writeXWiki
     , writeZimWiki
     , getWriter
     ) where
 
 import Control.Monad.Except (throwError)
-import Control.Monad (unless)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as BL
 import Data.Text (Text)
-import qualified Data.Text as T
-import Text.Pandoc.Shared (tshow)
 import Text.Pandoc.Class
 import Text.Pandoc.Definition
+import qualified Text.Pandoc.Format as Format
 import Text.Pandoc.Options
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Pandoc.Error
 import Text.Pandoc.Writers.AsciiDoc
 import Text.Pandoc.Writers.BibTeX
+import Text.Pandoc.Writers.ChunkedHTML
 import Text.Pandoc.Writers.CommonMark
 import Text.Pandoc.Writers.ConTeXt
 import Text.Pandoc.Writers.CslJson
-import Text.Pandoc.Writers.Docbook
+import Text.Pandoc.Writers.DocBook
 import Text.Pandoc.Writers.Docx
 import Text.Pandoc.Writers.DokuWiki
 import Text.Pandoc.Writers.EPUB
@@ -120,6 +123,7 @@ import Text.Pandoc.Writers.RTF
 import Text.Pandoc.Writers.TEI
 import Text.Pandoc.Writers.Texinfo
 import Text.Pandoc.Writers.Textile
+import Text.Pandoc.Writers.Typst
 import Text.Pandoc.Writers.XWiki
 import Text.Pandoc.Writers.ZimWiki
 
@@ -148,9 +152,9 @@ writers = [
   ,("slideous"     , TextWriter writeSlideous)
   ,("dzslides"     , TextWriter writeDZSlides)
   ,("revealjs"     , TextWriter writeRevealJs)
-  ,("docbook"      , TextWriter writeDocbook5)
-  ,("docbook4"     , TextWriter writeDocbook4)
-  ,("docbook5"     , TextWriter writeDocbook5)
+  ,("docbook"      , TextWriter writeDocBook5)
+  ,("docbook4"     , TextWriter writeDocBook4)
+  ,("docbook5"     , TextWriter writeDocBook5)
   ,("jats"         , TextWriter writeJatsArchiving)
   ,("jats_articleauthoring", TextWriter writeJatsArticleAuthoring)
   ,("jats_publishing" , TextWriter writeJatsPublishing)
@@ -176,10 +180,12 @@ writers = [
   ,("xwiki"        , TextWriter writeXWiki)
   ,("zimwiki"      , TextWriter writeZimWiki)
   ,("textile"      , TextWriter writeTextile)
+  ,("typst"        , TextWriter writeTypst)
   ,("rtf"          , TextWriter writeRTF)
   ,("org"          , TextWriter writeOrg)
   ,("asciidoc"     , TextWriter writeAsciiDoc)
-  ,("asciidoctor"  , TextWriter writeAsciiDoctor)
+  ,("asciidoctor"  , TextWriter writeAsciiDoc)
+  ,("asciidoc_legacy" , TextWriter writeAsciiDocLegacy)
   ,("haddock"      , TextWriter writeHaddock)
   ,("commonmark"   , TextWriter writeCommonMark)
   ,("commonmark_x" , TextWriter writeCommonMark)
@@ -190,32 +196,17 @@ writers = [
   ,("bibtex"       , TextWriter writeBibTeX)
   ,("biblatex"     , TextWriter writeBibLaTeX)
   ,("markua"       , TextWriter writeMarkua)
+  ,("chunkedhtml"  , ByteStringWriter writeChunkedHTML)
   ]
 
 -- | Retrieve writer, extensions based on formatSpec (format+extensions).
-getWriter :: PandocMonad m => Text -> m (Writer m, Extensions)
-getWriter s =
-  case parseFormatSpec s of
-        Left e  -> throwError $ PandocAppError $
-                    "Error parsing writer format " <> tshow s <> ": " <> tshow e
-        Right (writerName, extsToEnable, extsToDisable) ->
-           case lookup writerName writers of
-                   Nothing  -> throwError $
-                                 PandocUnknownWriterError writerName
-                   Just  w  -> do
-                     let allExts = getAllExtensions writerName
-                     let exts = foldr disableExtension
-                           (foldr enableExtension
-                             (getDefaultExtensions writerName)
-                                   extsToEnable) extsToDisable
-                     mapM_ (\ext ->
-                              unless (extensionEnabled ext allExts) $
-                                throwError $
-                                   PandocUnsupportedExtensionError
-                                   (T.drop 4 $ T.pack $ show ext) writerName)
-                          (extsToEnable ++ extsToDisable)
-                     return (w, exts)
-
+getWriter :: PandocMonad m => Format.FlavoredFormat -> m (Writer m, Extensions)
+getWriter flvrd = do
+  let writerName = Format.formatName flvrd
+  case lookup writerName writers of
+    Nothing  -> throwError $ PandocUnknownWriterError writerName
+    Just  w  -> (w,) <$>
+      Format.applyExtensionsDiff (Format.getExtensionsConfig writerName) flvrd
 
 writeJSON :: PandocMonad m => WriterOptions -> Pandoc -> m Text
 writeJSON _ = return . UTF8.toText . BL.toStrict . encode

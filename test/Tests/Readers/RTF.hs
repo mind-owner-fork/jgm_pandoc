@@ -1,6 +1,6 @@
 {- |
    Module      : Tests.Readers.RTF
-   Copyright   : © 2021-2022 John MacFarlane
+   Copyright   : © 2021-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : jgm@berkeley.edu
@@ -39,4 +39,3 @@ tests = map rtfTest [ "footnote"
                     , "table_simple"
                     , "table_error_codes"
                     ]
-

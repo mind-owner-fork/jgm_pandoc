@@ -16,7 +16,7 @@ import Text.Pandoc.Walk (walk)
 import Text.Pandoc.Builder as B
 import qualified Data.Sequence as Seq
 import Text.Pandoc.Readers.LaTeX.Parsing
-import Text.Pandoc.Readers.LaTeX.Types
+import Text.Pandoc.TeX
 import Text.Pandoc.Class
 import Text.Pandoc.Shared (trimMath, stripTrailingNewlines)
 import Text.Pandoc.Parsing hiding (blankline, mathDisplay, mathInline,
@@ -65,7 +65,7 @@ mathEnvWith f innerEnv name = f . mathDisplay . inner <$> mathEnv name
    where inner x = case innerEnv of
                         Nothing -> x
                         Just y  -> "\\begin{" <> y <> "}\n" <> x <>
-                                   "\\end{" <> y <> "}"
+                                   "\n\\end{" <> y <> "}"
 
 mathEnv :: PandocMonad m => Text -> LP m Text
 mathEnv name = do
@@ -214,9 +214,8 @@ addQed bs =
   qedSign = B.str "\xa0\x25FB"
 
 italicize :: Block -> Block
-italicize x@(Para [Image{}]) = x -- see #6925
+italicize x@(Para [Image{}])  = x -- see #6925
+italicize x@(Plain [Image{}]) = x -- ditto
 italicize (Para ils) = Para [Emph ils]
 italicize (Plain ils) = Plain [Emph ils]
 italicize x = x
-
-

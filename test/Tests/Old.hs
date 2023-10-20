@@ -1,6 +1,6 @@
 {- |
    Module      : Tests.Old
-   Copyright   : © 2006-2022 John MacFarlane
+   Copyright   : © 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley@edu>
@@ -128,7 +128,10 @@ tests pandocPath =
     , fb2WriterTest' "testsuite" [] "testsuite.native" "writer.fb2"
     ]
   , testGroup "mediawiki"
-    [ testGroup "writer" $ writerTests' "mediawiki"
+    [ testGroup "writer" $ mconcat [
+      writerTests' "mediawiki"
+      , extWriterTests' "mediawiki"
+      ]
     , test' "reader" ["-r", "mediawiki", "-w", "native", "-s"]
       "mediawiki-reader.wiki" "mediawiki-reader.native"
     ]
@@ -175,7 +178,7 @@ tests pandocPath =
         "tikiwiki-reader.tikiwiki" "tikiwiki-reader.native" ]
   , testGroup "other writers" $ map (\f -> testGroup f $ writerTests' f)
     [ "opendocument" , "context" , "texinfo", "icml", "tei"
-    , "man" , "plain" , "asciidoc", "asciidoctor"
+    , "man" , "plain" , "asciidoc", "asciidoc_legacy"
     , "xwiki", "zimwiki"
     ]
   , testGroup "writers-lang-and-dir"
@@ -190,15 +193,17 @@ tests pandocPath =
   , testGroup "ms"
     [ testGroup "writer" $ writerTests' "ms"
     ]
+  , testGroup "typst"
+    [ testGroup "writer" $ writerTests' "typst"
+    , testGroup "reader"
+       [ test' "typst-reader" ["-r", "typst", "-w", "native", "-s"]
+          "typst-reader.typ" "typst-reader.native"
+       ]
+    ]
+
   , testGroup "creole"
     [ test' "reader" ["-r", "creole", "-w", "native", "-s"]
       "creole-reader.txt" "creole-reader.native"
-    ]
-  , testGroup "custom writer"
-    [ test' "basic" ["-f", "native", "-t", "../data/sample.lua"]
-      "testsuite.native" "writer.custom"
-    , test' "tables" ["-f", "native", "-t", "../data/sample.lua"]
-      "tables.native" "tables.custom"
     ]
   , testGroup "man"
     [ test' "reader" ["-r", "man", "-w", "native", "-s"]

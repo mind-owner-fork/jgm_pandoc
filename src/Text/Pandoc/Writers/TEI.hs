@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternGuards     #-}
 {- |
    Module      : Text.Pandoc.Writers.Docbook
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -22,13 +22,15 @@ import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
+import Text.Pandoc.URI
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Shared
 import Text.Pandoc.XML
 
 -- | Convert Pandoc document to string in Docbook format.
 writeTEI :: PandocMonad m => WriterOptions -> Pandoc -> m Text
-writeTEI opts (Pandoc meta blocks) = do
+writeTEI opts doc = do
+  let Pandoc meta blocks = ensureValidXmlIdentifiers doc
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
@@ -97,7 +99,6 @@ imageToTEI opts attr src = return $ selfClosingTag "graphic" $
 
 -- | Convert a Pandoc block element to TEI.
 blockToTEI :: PandocMonad m => WriterOptions -> Block -> m (Doc Text)
-blockToTEI _ Null = return empty
 blockToTEI opts (Div attr@(_,"section":_,_) (Header lvl _ ils : xs)) =
   do
   -- TEI doesn't allow sections with no content, so insert some if needed
@@ -128,18 +129,6 @@ blockToTEI _ h@Header{} = do
 -- we use treat as Para to ensure that Plain text ends up contained by
 -- something:
 blockToTEI opts (Plain lst) = blockToTEI opts $ Para lst
--- title beginning with fig: indicates that the image is a figure
---blockToTEI opts (Para [Image attr txt (src,'f':'i':'g':':':_)]) =
---  let alt  = inlinesToTEI opts txt
---      capt = if null txt
---                then empty
---                else inTagsSimple "title" alt
---  in  inTagsIndented "figure" $
---        capt $$
---        (inTagsIndented "mediaobject" $
---           (inTagsIndented "imageobject"
---             (imageToTEI opts attr src)) $$
---           inTagsSimple "textobject" (inTagsSimple "phrase" alt))
 blockToTEI opts (Para lst) =
   inTags False "p" [] <$> inlinesToTEI opts lst
 blockToTEI opts (LineBlock lns) =
@@ -191,6 +180,8 @@ blockToTEI _ HorizontalRule = return $
   selfClosingTag "milestone" [("unit","undefined")
                              ,("type","separator")
                              ,("rendition","line")]
+blockToTEI opts (Figure attr capt bs) =
+  blockToTEI opts (figureDiv attr capt bs)
 
 -- TEI Tables
 -- TEI Simple's tables are composed of cells and rows; other

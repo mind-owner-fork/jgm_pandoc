@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.LaTeX.Util
-   Copyright   : Copyright (C) 2006-2022 John MacFarlane
+   Copyright   : Copyright (C) 2006-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -37,7 +37,7 @@ import qualified Data.Text as T
 import Text.Pandoc.Extensions (Extension(Ext_smart))
 import Data.Char (isLetter, isSpace, isDigit, isAscii, ord, isAlphaNum)
 import Text.Printf (printf)
-import Text.Pandoc.Shared (safeRead, elemText)
+import Text.Pandoc.Shared (safeRead)
 import qualified Data.Text.Normalize as Normalize
 import Data.List (uncons)
 
@@ -50,7 +50,7 @@ data StringContext = TextString
 stringToLaTeX :: PandocMonad m => StringContext -> Text -> LW m Text
 stringToLaTeX context zs = do
   opts <- gets stOptions
-  when ('\x200c' `elemText` zs) $
+  when (T.any (== '\x200c') zs) $
     modify (\s -> s { stZwnj = True })
   return $ T.pack $
     foldr (go opts context) mempty $ T.unpack $
@@ -91,6 +91,21 @@ stringToLaTeX context zs = do
             '\'':_ -> cs <> "\\," <> xs -- add thin space
             _      -> cs <> xs
     in case x of
+         _ | isUrl ->
+           case x of
+             '\\' -> emitc '/' -- NB / works as path sep even on Windows
+             '#' -> emits "\\#" -- #9014
+             '%' -> emits "\\%" -- #9014
+             '{' -> emits "\\%7B"
+             '}' -> emits "\\%7D"
+             '|' -> emits "\\%7C"
+             '^' -> emits "\\%5E"
+             '[' -> emits "\\%5B"
+             ']' -> emits "\\%5D"
+             '`' -> emits "\\%60"
+             _ -> emitc x
+         '{' -> emits "\\{"
+         '}' -> emits "\\}"
          '?' | ligatures ->  -- avoid ?` ligature
            case xs of
              '`':_ -> emits "?{}"
@@ -99,28 +114,25 @@ stringToLaTeX context zs = do
            case xs of
              '`':_ -> emits "!{}"
              _     -> emitc x
-         '{' -> emits "\\{"
-         '}' -> emits "\\}"
          '`' | ctx == CodeString -> emitcseq "\\textasciigrave"
-         '$' | not isUrl -> emits "\\$"
+         '$' -> emits "\\$"
          '%' -> emits "\\%"
          '&' -> emits "\\&"
-         '_' | not isUrl -> emits "\\_"
+         '_' -> emits "\\_"
          '#' -> emits "\\#"
-         '-' | not isUrl -> case xs of
+         '-' -> case xs of
                      -- prevent adjacent hyphens from forming ligatures
                      ('-':_) -> emits "-\\/"
                      _       -> emitc '-'
-         '~' | not isUrl -> emitcseq "\\textasciitilde"
+         '~' -> emitcseq "\\textasciitilde"
          '^' -> emits "\\^{}"
-         '\\'| isUrl     -> emitc '/' -- NB. / works as path sep even on Windows
-             | otherwise -> emitcseq "\\textbackslash"
-         '|' | not isUrl -> emitcseq "\\textbar"
-         '<' -> emitcseq "\\textless"
-         '>' -> emitcseq "\\textgreater"
-         '[' -> emits "{[}"  -- to avoid interpretation as
-         ']' -> emits "{]}"  -- optional arguments
-         '\'' | ctx == CodeString -> emitcseq "\\textquotesingle"
+         '\\' -> emitcseq "\\textbackslash"
+         '|'  -> emitcseq "\\textbar"
+         '<'  -> emitcseq "\\textless"
+         '>'  -> emitcseq "\\textgreater"
+         '['  -> emits "{[}"  -- to avoid interpretation as
+         ']'  -> emits "{]}"  -- optional arguments
+         '\'' -> emitcseq "\\textquotesingle"
          '\160' -> emits "~"
          '\x200B' -> emits "\\hspace{0pt}"  -- zero-width space
          '\x202F' -> emits "\\,"
@@ -182,7 +194,7 @@ toLabel z = go `fmap` stringToLaTeX URLString z
  where
    go = T.concatMap $ \x -> case x of
      _ | (isLetter x || isDigit x) && isAscii x -> T.singleton x
-       | x `elemText` "_-+=:;." -> T.singleton x
+       | T.any (== x) "_-+=:;." -> T.singleton x
        | otherwise -> T.pack $ "ux" <> printf "%x" (ord x)
 
 -- | Puts contents into LaTeX command.
@@ -237,24 +249,19 @@ wrapDiv (_,classes,kvs) t = do
                   Just "rtl" -> align "RTL"
                   Just "ltr" -> align "LTR"
                   _          -> id
-      wrapLang txt = case lang of
-                       Just lng -> let l = toBabel lng
-                                   in  inCmd "begin" "otherlanguage"
+      wrapLang txt = case lang >>= toBabel of
+                       Just l -> inCmd "begin" "otherlanguage"
                                             <> (braces (literal l))
                                        $$ blankline <> txt <> blankline
                                        $$ inCmd "end" "otherlanguage"
                        Nothing  -> txt
   return $ wrapColumns . wrapColumn . wrapDir . wrapLang $ t
 
-hypertarget :: PandocMonad m => Bool -> Text -> Doc Text -> LW m (Doc Text)
-hypertarget _ "" x    = return x
-hypertarget addnewline ident x = do
-  ref <- literal `fmap` toLabel ident
-  return $ text "\\hypertarget"
-              <> braces ref
-              <> braces ((if addnewline && not (isEmpty x)
-                             then "%" <> cr
-                             else empty) <> x)
+hypertarget :: PandocMonad m => Text -> LW m (Doc Text)
+hypertarget "" = return mempty
+hypertarget ident = do
+  label <- labelFor ident
+  return $ text "\\phantomsection" <> label
 
 labelFor :: PandocMonad m => Text -> LW m (Doc Text)
 labelFor ""    = return empty

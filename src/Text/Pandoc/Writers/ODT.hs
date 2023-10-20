@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.ODT
-   Copyright   : Copyright (C) 2008-2022 John MacFarlane
+   Copyright   : Copyright (C) 2008-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -27,6 +27,7 @@ import System.FilePath (takeDirectory, takeExtension, (<.>))
 import Text.Collate.Lang (Lang (..), renderLang)
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report, toLang)
 import qualified Text.Pandoc.Class.PandocMonad as P
+import Text.Pandoc.Data (readDataFile)
 import Text.Pandoc.Definition
 import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.ImageSize
@@ -34,9 +35,11 @@ import Text.Pandoc.Logging
 import Text.Pandoc.MIME (extensionFromMimeType, getMimeType)
 import Text.Pandoc.Options (WrapOption (..), WriterOptions (..))
 import Text.DocLayout
-import Text.Pandoc.Shared (stringify, pandocVersion, tshow)
+import Text.Pandoc.Shared (stringify, tshow)
+import Text.Pandoc.Version (pandocVersionText)
 import Text.Pandoc.Writers.Shared (lookupMetaString, lookupMetaBlocks,
-                                   fixDisplayMath, getLang)
+                                   fixDisplayMath, getLang,
+                                   ensureValidXmlIdentifiers)
 import Text.Pandoc.UTF8 (fromStringLazy, fromTextLazy, toTextLazy)
 import Text.Pandoc.Walk
 import Text.Pandoc.Writers.OpenDocument (writeOpenDocument)
@@ -44,6 +47,7 @@ import Text.Pandoc.XML
 import Text.Pandoc.XML.Light
 import Text.TeXMath
 import qualified Text.XML.Light as XL
+import Network.URI (parseRelativeReference, URI(uriPath))
 
 newtype ODTState = ODTState { stEntries :: [Entry]
                          }
@@ -58,8 +62,24 @@ writeODT :: PandocMonad m
 writeODT  opts doc =
   let initState = ODTState{ stEntries = []
                           }
+      doc' = fixInternalLinks . ensureValidXmlIdentifiers $ doc
   in
-    evalStateT (pandocToODT opts doc) initState
+    evalStateT (pandocToODT opts doc') initState
+
+-- | ODT internal links are evaluated relative to an imaginary folder
+-- structure that mirrors the zip structure.  The result is that relative
+-- links in the document need to start with `..`.  See #3524.
+fixInternalLinks :: Pandoc -> Pandoc
+fixInternalLinks = walk go
+ where
+  go (Link attr ils (src,tit)) =
+    Link attr ils (fixRel src,tit)
+  go x = x
+  fixRel uri =
+    case parseRelativeReference (T.unpack uri) of
+      Just u
+        | not (null (uriPath u)) -> tshow $ u{ uriPath = "../" <> uriPath u }
+      _ -> uri
 
 -- | Produce an ODT file from a Pandoc document.
 pandocToODT :: PandocMonad m
@@ -73,9 +93,10 @@ pandocToODT opts doc@(Pandoc meta _) = do
   lang <- toLang (getLang opts meta)
   refArchive <-
        case writerReferenceDoc opts of
-             Just f -> liftM toArchive $ lift $ P.readFileLazy f
+             Just f -> lift $ toArchive . B.fromStrict . fst <$>
+                                (P.fetchItem (T.pack f))
              Nothing -> lift $ toArchive . B.fromStrict <$>
-                                P.readDataFile "reference.odt"
+                                readDataFile "reference.odt"
   -- handle formulas and pictures
   -- picEntriesRef <- P.newIORef ([] :: [Entry])
   doc' <- walkM (transformPicMath opts) $ walk fixDisplayMath doc
@@ -92,7 +113,6 @@ pandocToODT opts doc@(Pandoc meta _) = do
                         Just m   -> selfClosingTag "manifest:file-entry"
                                      [("manifest:media-type", m)
                                      ,("manifest:full-path", T.pack fp)
-                                     ,("manifest:version", "1.2")
                                      ]
   let files = [ ent | ent <- filesInArchive archive,
                              not ("META-INF" `isPrefixOf` ent) ]
@@ -104,9 +124,10 @@ pandocToODT opts doc@(Pandoc meta _) = do
         $$
          inTags True "manifest:manifest"
             [("xmlns:manifest","urn:oasis:names:tc:opendocument:xmlns:manifest:1.0")
-            ,("manifest:version","1.2")] ( selfClosingTag "manifest:file-entry"
+            ,("manifest:version","1.3")] ( selfClosingTag "manifest:file-entry"
                  [("manifest:media-type","application/vnd.oasis.opendocument.text")
-                 ,("manifest:full-path","/")]
+                 ,("manifest:full-path","/")
+                 ,("manifest:version", "1.3")]
                 $$ vcat ( map toFileEntry files )
                 $$ vcat ( map toFileEntry formulas )
               )
@@ -136,8 +157,8 @@ pandocToODT opts doc@(Pandoc meta _) = do
            ,("xmlns:meta","urn:oasis:names:tc:opendocument:xmlns:meta:1.0")
            ,("xmlns:ooo","http://openoffice.org/2004/office")
            ,("xmlns:grddl","http://www.w3.org/2003/g/data-view#")
-           ,("office:version","1.2")] ( inTags True "office:meta" []
-                 ( metaTag "meta:generator" ("Pandoc/" <> pandocVersion)
+           ,("office:version","1.3")] ( inTags True "office:meta" []
+                 ( metaTag "meta:generator" ("Pandoc/" <> pandocVersionText)
                    $$
                    metaTag "dc:title" (stringify title)
                    $$
@@ -276,7 +297,7 @@ documentSettings isTextMode = fromStringLazy $ render Nothing
       ,("xmlns:xlink","http://www.w3.org/1999/xlink")
       ,("xmlns:config","urn:oasis:names:tc:opendocument:xmlns:config:1.0")
       ,("xmlns:ooo","http://openoffice.org/2004/office")
-      ,("office:version","1.2")] (
+      ,("office:version","1.3")] (
        inTagsSimple "office:settings" $
          inTags False "config:config-item-set"
            [("config:name", "ooo:configuration-settings")] $

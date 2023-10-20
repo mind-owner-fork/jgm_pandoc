@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.RIS
-   Copyright   : Copyright (C) 2022 John MacFarlane
+   Copyright   : Copyright (C) 2022-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -29,7 +29,7 @@ import Citeproc (Reference(..), ItemId(..), Val(..), Date(..), DateParts(..),
 import Text.Pandoc.Builder as B
 import Text.Pandoc.Class (PandocMonad)
 import Text.Pandoc.Citeproc.MetaValue (referenceToMetaValue)
-import Text.Pandoc.Citeproc.BibTeX (toName)
+import Text.Pandoc.Citeproc.Name (toName, NameOpts(..))
 import Control.Monad.Except (throwError)
 import qualified Data.Text as T
 import Data.Text (Text)
@@ -59,15 +59,14 @@ readRIS _opts inp = do
         B.doc mempty
     Left e       -> throwError e
 
-type RISParser m = ParserT Sources () m
+type RISParser m = ParsecT Sources () m
 
 risLine :: PandocMonad m => RISParser m (Text, Text)
 risLine = do
   key <- T.pack <$> count 2 (satisfy (\c -> isAsciiUpper c || isDigit c))
   _ <- many1 spaceChar
   char '-'
-  _ <- many1 spaceChar
-  val <- anyLine
+  val <- (many1 spaceChar *> anyLine) <|> mempty <$ newline
   return (key, T.strip val)
 
 risSeparator :: PandocMonad m => RISParser m ()
@@ -76,7 +75,7 @@ risSeparator = do
   _ <- many1 spaceChar
   char '-'
   _ <- anyLine
-  return ()
+  optional blanklines
 
 risRecord :: PandocMonad m => RISParser m [(Text, Text)]
 risRecord = manyTill risLine risSeparator
@@ -141,9 +140,11 @@ risRecordToReference keys = addId $ foldr go defref keys
                        M.insert (toVariable k) (FancyVal v)
                        (referenceVariables r) }
    addName k v r =
-     let new = toName [] . B.toList .  B.text $ v
+     let new = toName NameOpts{ nameOptsPrefixIsNonDroppingParticle = False
+                              , nameOptsUseJuniorComma = False }
+                . B.toList .  B.text $ v
          f Nothing   = Just (NamesVal new)
-         f (Just (NamesVal ns)) = Just (NamesVal (ns ++ new))
+         f (Just (NamesVal ns)) = Just (NamesVal (new ++ ns))
          f (Just x) = Just x
       in r{ referenceVariables =
               M.alter f k (referenceVariables r) }

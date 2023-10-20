@@ -76,6 +76,64 @@ ensuring backwards compatibility.
 [patterns]: http://lua-users.org/wiki/PatternsTutorial
 [lpeg]: http://www.inf.puc-rio.br/~roberto/lpeg/
 
+# Bytestring readers
+
+In order to read binary formats, including docx, odt, and epub,
+pandoc supports the `ByteStringReader` function. A
+`ByteStringReader` function is similar to the `Reader` function
+that processes text input. Instead of a list of sources, the
+ByteStringReader function is passed a bytestring, i.e., a string
+that contains the binary input.
+
+``` lua
+-- read input as epub
+function ByteStringReader (input)
+  return pandoc.read(input, 'epub')
+end
+```
+
+# Format extensions
+
+Custom readers can be built such that their behavior is
+controllable through format extensions, such as `smart`,
+`citations`, or `hard-line-breaks`. Supported extensions are those
+that are present as a key in the global `Extensions` table. Fields
+of extensions that are enabled default have the value `true` or
+`enable`, while those that are supported but disabled have value
+`false` or `disable`.
+
+Example: A writer with the following global table supports the
+extensions `smart`, `citations`, and `foobar`, with `smart` enabled and
+the other two disabled by default:
+
+``` lua
+Extensions = {
+  smart = 'enable',
+  citations = 'disable',
+  foobar = true
+}
+```
+
+The users control extensions as usual, e.g., `pandoc -f
+my-reader.lua+citations`. The extensions are accessible through
+the reader options' `extensions` field, e.g.:
+
+``` lua
+function Reader (input, opts)
+  print(
+    'The citations extension is',
+    opts.extensions:includes 'citations' and 'enabled' or 'disabled'
+  )
+  -- ...
+end
+```
+
+Extensions that are neither enabled nor disabled in the
+`Extensions` field are treated as unsupported by the
+reader. Trying to modify such an extension via the command line
+will lead to an error.
+
+
 # Example: plain text reader
 
 This is a simple example using [lpeg] to parse the input
@@ -399,16 +457,18 @@ This custom reader consumes the JSON output of
 a document containing the current top articles on the
 Haskell subreddit.
 
-It assumes that the `luajson` library is available.  (It can be
-installed using `luarocks install luajson`---but be sure you are
-installing it for Lua 5.3, which is the version packaged with
-pandoc.)
+It assumes that the `pandoc.json` library is available, which
+ships with pandoc versions after (not including) 3.1. It's still
+possible to use this with older pandoc version by using a
+different JSON library. E.g., `luajson` can be installed using
+`luarocks install luajson`---but be sure you are installing it for
+Lua 5.4, which is the version packaged with pandoc.
 
 
 ```lua
 -- consumes the output of https://www.reddit.com/r/haskell.json
 
-local json = require'json'  -- luajson must be available
+local json = require 'pandoc.json'
 
 local function read_inlines(raw)
   local doc = pandoc.read(raw, "commonmark")

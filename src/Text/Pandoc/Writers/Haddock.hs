@@ -14,7 +14,9 @@ Conversion of 'Pandoc' documents to haddock markup.
 Haddock:  <http://www.haskell.org/haddock/doc/html/>
 -}
 module Text.Pandoc.Writers.Haddock (writeHaddock) where
+import Control.Monad (zipWithM)
 import Control.Monad.State.Strict
+    ( StateT, MonadState(get), modify, evalStateT )
 import Data.Char (isAlphaNum)
 import Data.Default
 import Data.Text (Text)
@@ -25,6 +27,7 @@ import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
+import Text.Pandoc.URI
 import Text.Pandoc.Templates (renderTemplate)
 import Text.Pandoc.Writers.Shared
 
@@ -90,16 +93,12 @@ blockToHaddock :: PandocMonad m
                => WriterOptions -- ^ Options
                -> Block         -- ^ Block element
                -> StateT WriterState m (Doc Text)
-blockToHaddock _ Null = return empty
 blockToHaddock opts (Div _ ils) = do
   contents <- blockListToHaddock opts ils
   return $ contents <> blankline
 blockToHaddock opts (Plain inlines) = do
   contents <- inlineListToHaddock opts inlines
   return $ contents <> cr
--- title beginning with fig: indicates figure
-blockToHaddock opts (SimpleFigure attr alt (src, tit))
-  = blockToHaddock opts (Para [Image attr alt (src,tit)])
 blockToHaddock opts (Para inlines) =
   -- TODO:  if it contains linebreaks, we need to use a @...@ block
   (<> blankline) `fmap` blockToHaddock opts (Plain inlines)
@@ -149,6 +148,9 @@ blockToHaddock opts (OrderedList (start,_,delim) items) = do
 blockToHaddock opts (DefinitionList items) = do
   contents <- mapM (definitionListItemToHaddock opts) items
   return $ vcat contents <> blankline
+blockToHaddock opts (Figure _ (Caption _ longcapt) body) =
+  -- Haddock has no concept of figures, floats, or captions.
+  fmap (<> blankline) (blockListToHaddock opts (body ++ longcapt))
 
 -- | Convert bullet list item (list of blocks) to haddock
 bulletListItemToHaddock :: PandocMonad m

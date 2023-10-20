@@ -6,7 +6,7 @@
 {-# LANGUAGE TemplateHaskell    #-}
 {- |
    Module      : Text.Pandoc.Options
-   Copyright   : Copyright (C) 2012-2022 John MacFarlane
+   Copyright   : Copyright (C) 2012-2023 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -45,6 +45,7 @@ import GHC.Generics (Generic)
 import Skylighting (SyntaxMap, defaultSyntaxMap)
 import Text.DocTemplates (Context(..), Template)
 import Text.Pandoc.Extensions
+import Text.Pandoc.Chunks (PathTemplate)
 import Text.Pandoc.Highlighting (Style, pygments)
 import Text.Pandoc.UTF8 (toStringLazy)
 import Data.Aeson.TH (deriveJSON)
@@ -312,10 +313,13 @@ data WriterOptions = WriterOptions
   , writerHighlightStyle    :: Maybe Style  -- ^ Style to use for highlighting
                                            -- (Nothing = no highlighting)
   , writerSetextHeaders     :: Bool       -- ^ Use setext headers for levels 1-2 in markdown
+  , writerListTables        :: Bool       -- ^ Use list tables for RST tables
   , writerEpubSubdirectory  :: Text       -- ^ Subdir for epub in OCF
   , writerEpubMetadata      :: Maybe Text -- ^ Metadata to include in EPUB
   , writerEpubFonts         :: [FilePath] -- ^ Paths to fonts to embed
-  , writerEpubChapterLevel  :: Int            -- ^ Header level for chapters (separate files)
+  , writerEpubTitlePage     :: Bool           -- ^ Include title page in epub
+  , writerSplitLevel        :: Int        -- ^ Header level at which to split EPUB or chunked HTML into separate files
+  , writerChunkTemplate     :: PathTemplate  -- ^ Template for filenames in chunked HTML
   , writerTOCDepth          :: Int            -- ^ Number of levels to include in TOC
   , writerReferenceDoc      :: Maybe FilePath -- ^ Path to reference document if specified
   , writerReferenceLocation :: ReferenceLocation    -- ^ Location of footnotes and references for writing markdown
@@ -347,10 +351,13 @@ instance Default WriterOptions where
                       , writerListings         = False
                       , writerHighlightStyle   = Just pygments
                       , writerSetextHeaders    = False
+                      , writerListTables       = False
                       , writerEpubSubdirectory = "EPUB"
                       , writerEpubMetadata     = Nothing
                       , writerEpubFonts        = []
-                      , writerEpubChapterLevel = 1
+                      , writerEpubTitlePage    = True
+                      , writerSplitLevel       = 1
+                      , writerChunkTemplate    = "%s-%i.html"
                       , writerTOCDepth         = 3
                       , writerReferenceDoc     = Nothing
                       , writerReferenceLocation = EndOfDocument

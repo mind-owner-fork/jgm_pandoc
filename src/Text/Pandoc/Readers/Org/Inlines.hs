@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Inlines
-   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2023 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -42,10 +42,6 @@ import qualified Data.Text as T
 --
 -- Functions acting on the parser state
 --
-recordAnchorId :: PandocMonad m => Text -> OrgParser m ()
-recordAnchorId i = updateState $ \s ->
-  s{ orgStateAnchorIds = i : orgStateAnchorIds s }
-
 pushToInlineCharStack :: PandocMonad m => Char -> OrgParser m ()
 pushToInlineCharStack c = updateState $ \s ->
   s{ orgStateEmphasisCharStack = c:orgStateEmphasisCharStack s }
@@ -126,8 +122,12 @@ linebreak :: PandocMonad m => OrgParser m (F Inlines)
 linebreak = try $ pure B.linebreak <$ string "\\\\" <* skipSpaces <* newline
 
 str :: PandocMonad m => OrgParser m (F Inlines)
-str = return . B.str <$> many1Char (noneOf $ specialChars ++ "\n\r ")
+str = return . B.str <$>
+      ( many1Char (noneOf $ specialChars ++ "\n\r ") >>= updatePositions' )
       <* updateLastStrPos
+  where
+    updatePositions' str' = str' <$
+      maybe mzero (updatePositions . snd) (T.unsnoc str')
 
 -- | An endline character that can be treated as a space, not a structural
 -- break.  This should reflect the values of the Emacs variable
@@ -380,8 +380,9 @@ orgRefCiteKey =
       endOfCitation = try $ do
         many $ satisfy isCiteKeySpecialChar
         satisfy $ not . isCiteKeyChar
-  in try $ satisfy isCiteKeyChar `many1TillChar` lookAhead endOfCitation
-
+  in try $ do
+        optional (char '&') -- this is used in org-ref v3
+        satisfy isCiteKeyChar `many1TillChar` lookAhead endOfCitation
 
 -- | Supported citation types.  Only a small subset of org-ref types is
 -- supported for now.  TODO: rewrite this, use LaTeX reader as template.
@@ -508,15 +509,9 @@ internalLink link title = do
 -- @anchor-id@ contains spaces, we are more restrictive in what is accepted as
 -- an anchor.
 anchor :: PandocMonad m => OrgParser m (F Inlines)
-anchor =  try $ do
-  anchorId <- parseAnchor
-  recordAnchorId anchorId
+anchor =  do
+  anchorId <- orgAnchor
   returnF $ B.spanWith (solidify anchorId, [], []) mempty
- where
-       parseAnchor = string "<<"
-                     *> many1Char (noneOf "\t\n\r<>\"' ")
-                     <* string ">>"
-                     <* skipSpaces
 
 -- | Replace every char but [a-zA-Z0-9_.-:] with a hyphen '-'.  This mirrors
 -- the org function @org-export-solidify-link-text@.
@@ -679,7 +674,6 @@ rawMathBetween s e = try $ textStr s *> manyTillChar anyChar (try $ textStr e)
 emphasisStart :: PandocMonad m => Char -> OrgParser m Char
 emphasisStart c = try $ do
   guard =<< afterEmphasisPreChar
-  guard =<< notAfterString
   char c
   lookAhead (noneOf emphasisForbiddenBorderChars)
   pushToInlineCharStack c
@@ -754,7 +748,7 @@ many1TillNOrLessNewlines n p end = try $
 
 -- | Chars not allowed at the (inner) border of emphasis
 emphasisForbiddenBorderChars :: [Char]
-emphasisForbiddenBorderChars = "\t\n\r "
+emphasisForbiddenBorderChars = "\t\n\r \x200B"
 
 -- | The maximum number of newlines within
 emphasisAllowedNewlines :: Int
@@ -792,8 +786,8 @@ notAfterForbiddenBorderChar = do
 subOrSuperExpr :: PandocMonad m => OrgParser m (F Inlines)
 subOrSuperExpr = try $
   simpleSubOrSuperText <|>
-  (choice [ charsInBalanced '{' '}' (noneOf "\n\r")
-          , enclosing ('(', ')') <$> charsInBalanced '(' ')' (noneOf "\n\r")
+  (choice [ charsInBalanced '{' '}' (T.singleton <$> noneOf "\n\r")
+          , enclosing ('(', ')') <$> charsInBalanced '(' ')' (T.singleton <$> noneOf "\n\r")
           ] >>= parseFromString (mconcat <$> many inline))
  where enclosing (left, right) s = T.cons left $ T.snoc s right
 
@@ -888,7 +882,8 @@ macro = try $ do
       updateState $ \s -> s { orgStateMacroDepth = recursionDepth }
       return res
  where
-  argument = manyChar $ notFollowedBy eoa *> noneOf ","
+  argument = manyChar $ notFollowedBy eoa *> (escapedComma <|> noneOf ",")
+  escapedComma = try $ char '\\' *> oneOf ",\\"
   eoa = string ")}}}"
 
 smart :: PandocMonad m => OrgParser m (F Inlines)

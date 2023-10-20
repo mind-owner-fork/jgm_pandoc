@@ -5,12 +5,18 @@
 
 {- |
 Module      : Text.Pandoc.Writers.GridTable
-Copyright   : © 2020-2022 Albert Krewinkel
+Copyright   : © 2020-2023 Albert Krewinkel
 License     : GNU GPL, version 2 or above
 
 Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
 
-Grid representation of pandoc tables.
+Grid representation of pandoc tables. The structures in this module
+allow to describe 'Text.Pandoc.Definition.Table' elements without loss
+of information. However, they are simpler to use when the grid layout of
+a table must be known.
+
+The "grid tables" handled here are conceptually similar to grid tables
+in reStructuredText and Markdown, but are more general.
 -}
 module Text.Pandoc.Writers.GridTable
   ( Table (..)
@@ -39,6 +45,7 @@ import qualified Text.Pandoc.Builder as B
 data GridCell
   = ContentCell Attr Alignment RowSpan ColSpan [Block]
   | ContinuationCell CellIndex
+  | UnassignedCell
   deriving (Show)
 
 -- | Row index in a table part.
@@ -97,7 +104,7 @@ data BuilderCell
 fromBuilderCell :: BuilderCell -> GridCell
 fromBuilderCell = \case
   FilledCell c -> c
-  FreeCell -> error "Found an unassigned cell."
+  FreeCell -> UnassignedCell
 
 rowsToPart :: Attr -> [B.Row] -> Part
 rowsToPart attr = \case
@@ -118,17 +125,29 @@ rowsToPart attr = \case
             forM_ cells $ \(Cell cellAttr align rs cs blks) -> do
               ridx' <- readSTRef ridx
               let nextFreeInRow colindex@(ColIndex c) = do
-                    readArray grid (ridx', colindex) >>= \case
-                      FreeCell -> pure colindex
-                      _ -> nextFreeInRow $ ColIndex (c + 1)
-              cidx' <- readSTRef cidx >>= nextFreeInRow
-              writeArray grid (ridx', cidx') . FilledCell $
-                ContentCell cellAttr align rs cs blks
-              forM_ (continuationIndices ridx' cidx' rs cs) $ \idx -> do
-                writeArray grid idx . FilledCell $
-                  ContinuationCell (ridx', cidx')
-              -- go to new column
-              writeSTRef cidx cidx'
+                    let idx = (ridx', colindex)
+                    if gbounds `inRange` idx
+                      then readArray grid idx >>= \case
+                             FreeCell -> pure (Just colindex)
+                             _ -> nextFreeInRow $ ColIndex (c + 1)
+                      else pure Nothing  -- invalid table
+              mcidx' <- readSTRef cidx >>= nextFreeInRow
+              -- If there is a FreeCell in the current row, then fill it
+              -- with the current cell and mark cells in this and the
+              -- following rows as continuation cells if necessary.
+              --
+              -- Just skip the current table cell if no FreeCell was
+              -- found; this can only happen with invalid tables.
+              case mcidx' of
+                Nothing -> pure () -- no FreeCell left in row -- skip cell
+                Just cidx' -> do
+                  writeArray grid (ridx', cidx') . FilledCell $
+                    ContentCell cellAttr align rs cs blks
+                  forM_ (continuationIndices ridx' cidx' rs cs) $ \idx -> do
+                    writeArray grid idx . FilledCell $
+                      ContinuationCell (ridx', cidx')
+                  -- go to new column
+                  writeSTRef cidx cidx'
             -- go to next row
             modifySTRef ridx (incrRowIndex 1)
           -- Swap BuilderCells with normal GridCells.

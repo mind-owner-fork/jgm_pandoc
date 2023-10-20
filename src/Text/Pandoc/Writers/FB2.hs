@@ -3,7 +3,7 @@
 {- |
 Module      : Text.Pandoc.Writers.FB2
 Copyright   : Copyright (C) 2011-2012 Sergey Astanin
-                            2012-2022 John MacFarlane
+                            2012-2023 John MacFarlane
 License     : GNU GPL, version 2 or above
 
 Maintainer  : John MacFarlane
@@ -18,18 +18,17 @@ FictionBook is an XML-based e-book format. For more information see:
 -}
 module Text.Pandoc.Writers.FB2 (writeFB2)  where
 
-import Control.Monad (zipWithM)
+import Control.Monad (zipWithM, liftM)
 import Control.Monad.Except (catchError, throwError)
-import Control.Monad.State.Strict (StateT, evalStateT, get, gets, lift, liftM, modify)
-import Data.ByteString.Base64 (encode)
+import Control.Monad.State.Strict (StateT, evalStateT, get, gets, lift, modify)
+import Data.ByteString.Base64 (encodeBase64)
 import Data.Char (isAscii, isControl, isSpace)
 import Data.Either (lefts, rights)
 import Data.List (intercalate)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Encoding as TE
-import Text.Pandoc.Network.HTTP (urlEncode)
+import Text.Pandoc.URI (urlEncode, isURI)
 import Text.Pandoc.XML.Light as X
 
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
@@ -38,9 +37,11 @@ import Text.Pandoc.Definition
 import Text.Pandoc.Error (PandocError(..))
 import Text.Pandoc.Logging
 import Text.Pandoc.Options (HTMLMathMethod (..), WriterOptions (..), def)
-import Text.Pandoc.Shared (capitalize, isURI, orderedListMarkers,
+import Text.Pandoc.Shared (blocksToInlines, capitalize, orderedListMarkers,
                            makeSections, tshow, stringify)
-import Text.Pandoc.Writers.Shared (lookupMetaString, toLegacyTable)
+import Text.Pandoc.Walk (walk)
+import Text.Pandoc.Writers.Shared (lookupMetaString, toLegacyTable,
+                                   ensureValidXmlIdentifiers)
 import Data.Generics (everywhere, mkT)
 
 -- | Data to be written at the end of the document:
@@ -76,7 +77,8 @@ pandocToFB2 :: PandocMonad m
             => WriterOptions
             -> Pandoc
             -> FBM m Text
-pandocToFB2 opts (Pandoc meta blocks) = do
+pandocToFB2 opts doc = do
+     let Pandoc meta blocks = ensureValidXmlIdentifiers doc
      modify (\s -> s { writerOptions = opts })
      desc <- description meta
      title <- cMapM toXml . docTitle $ meta
@@ -178,6 +180,8 @@ renderSection lvl (Div (id',"section":_,_) (Header _ _ title : xs)) = do
       then el "section" (title' ++ content)
       else el "section" ([uattr "id" id'], title' ++ content)
   return [sectionContent]
+renderSection lvl (Div _attr bs) =
+  cMapM (renderSection lvl) bs
 renderSection _ b = blockToXml b
 
 -- | Only <p> and <empty-line> are allowed within <title> in FB2.
@@ -233,7 +237,7 @@ fetchImage href link = do
                                report $ CouldNotDetermineMimeType link
                                return Nothing
                              Just mime -> return $ Just (mime,
-                                                      TE.decodeUtf8 $ encode bs))
+                                                        encodeBase64 bs))
                     (\e ->
                        do report $ CouldNotFetchResource link (tshow e)
                           return Nothing)
@@ -296,11 +300,11 @@ mkitem mrk bs = do
 
 -- | Convert a block-level Pandoc's element to FictionBook XML representation.
 blockToXml :: PandocMonad m => Block -> FBM m [Content]
+blockToXml (Plain [img@Image {}]) = insertImage NormalImage img
 blockToXml (Plain ss) = cMapM toXml ss  -- FIXME: can lead to malformed FB2
+-- Special handling for singular images and display math elements
 blockToXml (Para [Math DisplayMath formula]) = insertMath NormalImage formula
--- title beginning with fig: indicates that the image is a figure
-blockToXml (SimpleFigure atr alt (src, tit)) =
-    insertImage NormalImage (Image atr alt (src,tit))
+blockToXml (Para [img@(Image {})]) = insertImage NormalImage img
 blockToXml (Para ss) = list . el "p" <$> cMapM toXml ss
 blockToXml (CodeBlock _ s) = return . spaceBeforeAfter .
                              map (el "p" . el "code") . T.lines $ s
@@ -357,7 +361,11 @@ blockToXml (Table _ blkCapt specs thead tbody tfoot) = do
       align_str AlignCenter  = "center"
       align_str AlignRight   = "right"
       align_str AlignDefault = "left"
-blockToXml Null = return []
+blockToXml (Figure _attr (Caption _ longcapt) body) =
+  let alt = blocksToInlines longcapt
+      addAlt (Image imgattr [] tgt) = Image imgattr alt tgt
+      addAlt inln                   = inln
+  in cMapM blockToXml (walk addAlt body)
 
 -- Replace plain text with paragraphs and add line break after paragraphs.
 -- It is used to convert plain text from tight list items to paragraphs.
